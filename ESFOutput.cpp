@@ -277,7 +277,7 @@ void ESFOutput::SetRegisterBank0(uint8_t reg, uint8_t value)
 	}
 	else
 	{
-		ESFFile << esfcmd;
+		ESFFile << esfcmd << value;
 	}
 }
 
@@ -295,7 +295,36 @@ void ESFOutput::SetRegisterBank1(uint8_t reg, uint8_t value)
 	}
 	else
 	{
-		ESFFile << esfcmd;
+		ESFFile << esfcmd << value;
+	}
+}
+
+void ESFOutput::SetPCMRate(uint8_t rate)
+{
+	//ESF_SetFMReg 0, $24, ((\rate)^$3FF)>>2
+	//ESF_SetFMReg 0, $25, ((\rate) ^ $3FF) & 3
+	// F8 24 xx F8 25 yy 
+
+	uint8_t esfcmdset = 0xF8;
+	uint8_t esfcmd1 = 0x24;
+	uint8_t esfcmd2 = 0x25;
+	uint8_t ratehi = (rate ^ 0x3FF) >> 2;
+	uint8_t ratelo = (rate ^ 0x3FF) & 3;
+
+	if (ASMOut)
+	{
+		ESFFile << "\tdc.b ";
+		hexy(ESFFile, esfcmdset, "$");
+		hexy(ESFFile, esfcmd1, ", $");
+		hexy(ESFFile, ratehi, ", $");
+		hexy(ESFFile, esfcmdset, ", $");
+		hexy(ESFFile, esfcmd2, ", $");
+		hexy(ESFFile, ratelo, ", $");
+		ESFFile << "\t; Set PCM rate to value " << (int)rate << "\n";
+	}
+	else
+	{
+		ESFFile << esfcmdset << esfcmd1 << ratehi << esfcmdset << esfcmd2 << ratelo;
 	}
 }
 

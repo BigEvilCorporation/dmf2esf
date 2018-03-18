@@ -471,15 +471,23 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
     uint8_t EffectType;
     uint8_t EffectParam;
 
-    /* Clean up effects */
-    Channels[chan].m_effectNoteCut.NoteCut = EFFECT_OFF;
-    Channels[chan].m_effectNoteDelay.NoteDelay = EFFECT_OFF;
+    //Clean up effects
+    channel.m_effectNoteCut.NoteCut = EFFECT_OFF;
+    channel.m_effectNoteDelay.NoteDelay = EFFECT_OFF;
 
-    /* Get row data */
-	Channels[chan].Note = m_dmfFile.m_channels[chan].m_patternPages[CurrPattern].m_notes[CurrRow].m_note;
-	Channels[chan].Octave = m_dmfFile.m_channels[chan].m_patternPages[CurrPattern].m_notes[CurrRow].m_octave;
-	Channels[chan].NewVolume = m_dmfFile.m_channels[chan].m_patternPages[CurrPattern].m_notes[CurrRow].m_volume;
-	Channels[chan].NewInstrument = m_dmfFile.m_channels[chan].m_patternPages[CurrPattern].m_notes[CurrRow].m_instrument;
+    //Get row data
+	channel.Note = m_dmfFile.m_channels[chan].m_patternPages[CurrPattern].m_notes[CurrRow].m_note;
+	channel.Octave = m_dmfFile.m_channels[chan].m_patternPages[CurrPattern].m_notes[CurrRow].m_octave;
+	channel.NewVolume = m_dmfFile.m_channels[chan].m_patternPages[CurrPattern].m_notes[CurrRow].m_volume;
+	channel.NewInstrument = m_dmfFile.m_channels[chan].m_patternPages[CurrPattern].m_notes[CurrRow].m_instrument;
+
+	//Get instrument
+	const DMFFile::Instrument* instrument = NULL;
+	
+	if (channel.NewInstrument >= 0 && channel.NewInstrument < m_dmfFile.m_numInstruments)
+	{
+		instrument = &m_dmfFile.m_instruments[channel.NewInstrument];
+	}
 
 	uint8_t nextNote = 0;
 	uint8_t nextOctave = 0;
@@ -517,6 +525,57 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
         else if(Channels[chan].Type == CHANNEL_TYPE_PSG || CHANNEL_TYPE_PSG4)
             esf->SetVolume(Channels[chan].ESFId,(Channels[chan].Volume));
     }
+
+#if 0
+	//Process PSG noise mode envelope
+	if (instrument && (instrument->m_mode == DMFFile::INSTRUMENT_PSG) && (instrument->m_paramsPSG.envelopeDutyNoise.envelopeSize > 0))
+	{
+		if (channel.Note == NOTE_OFF)
+		{
+			//End envelope
+			channel.m_effectPSGNoise.Mode = EFFECT_OFF;
+			PSGNoiseFreq = 0;
+			PSGPeriodicNoise = 0;
+		}
+		else
+		{
+			//Begin envelope
+			channel.m_effectPSGNoise.Mode = EFFECT_NORMAL;
+			PSGPeriodicNoise = 1;
+			channel.m_effectPSGNoise.EnvelopeIdx = 0;
+			channel.m_effectPSGNoise.EnvelopeSize = instrument->m_paramsPSG.envelopeDutyNoise.envelopeSize;
+			channel.m_effectPSGNoise.EnvelopeData = instrument->m_paramsPSG.envelopeDutyNoise.envelopeData;
+		}
+	}
+#endif
+
+#if 0
+	//Process PSG noise mode "envelope"
+	if (instrument && (instrument->m_mode == DMFFile::INSTRUMENT_PSG) && (instrument->m_paramsPSG.envelopeDutyNoise.envelopeSize > 0))
+	{
+		if (channel.Note == NOTE_OFF)
+		{
+			//End noise mode
+			PSGNoiseFreq = 0;
+			PSGPeriodicNoise = 0;
+		}
+		else
+		{
+			//Begin noise mode
+			int noiseMode = instrument->m_paramsPSG.envelopeDutyNoise.envelopeData[0];
+			if (noiseMode == 0 || noiseMode == 2)
+			{
+				PSGNoiseFreq = 1;
+				PSGPeriodicNoise = 1;
+			}
+			else if (noiseMode == 1 || noiseMode == 3)
+			{
+				PSGNoiseFreq = 1;
+				PSGPeriodicNoise = 0;
+			}
+		}
+	}
+#endif
 
     /* Parse some effects before any note ons */
     for(EffectCounter=0;EffectCounter<Channels[chan].EffectCount;EffectCounter++)
@@ -566,6 +625,8 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
 		channel.m_effectPortaNote.PortaNote = EFFECT_OFF;
 		channel.m_effectPortmento.Porta == EFFECT_OFF;
 		channel.m_effectVolSlide.VolSlide = EFFECT_OFF;
+		channel.m_effectPSGNoise.Mode = EFFECT_OFF;
+		channel.m_effectPSGNoise.EnvelopeSize = 0;
     }
     /* Note on? */
     else if(Channels[chan].Note != 0)
@@ -821,7 +882,17 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
 EffectStage DMFConverter::GetActiveEffectStage(uint8_t chan)
 {
 	//TODO: Other effects
-	return Channels[chan].m_effectPortmento.Porta == EFFECT_OFF ? EFFECT_STAGE_OFF : Channels[chan].m_effectPortmento.Stage;
+	if (Channels[chan].m_effectPortmento.Porta != EFFECT_OFF)
+	{
+		return Channels[chan].m_effectPortmento.Stage;
+	}
+
+	if (Channels[chan].m_effectPSGNoise.Mode != EFFECT_OFF)
+	{
+		return EFFECT_STAGE_CONTINUE;
+	}
+
+	return EFFECT_STAGE_OFF;
 }
 
 int DMFConverter::ProcessActiveEffects(uint8_t chan)
@@ -887,6 +958,20 @@ int DMFConverter::ProcessActiveEffects(uint8_t chan)
 		channel.m_effectPortmento.Stage = EFFECT_STAGE_CONTINUE;
 	}
 
+#if 0
+	if (channel.m_effectPSGNoise.Mode == EFFECT_NORMAL)
+	{
+		//Get noise frequency
+		uint32_t noiseFreq = channel.m_effectPSGNoise.EnvelopeData[channel.m_effectPSGNoise.EnvelopeIdx % channel.m_effectPSGNoise.EnvelopeSize];
+
+		//Set frequency
+		SetFrequency(chan, noiseFreq, false);
+
+		//Tick effect
+		channel.m_effectPSGNoise.EnvelopeIdx++;
+	}
+#endif
+
 	return numEffectsProcess;
 }
 
@@ -897,9 +982,13 @@ void DMFConverter::NoteOn(uint8_t chan)
     {
         uint8_t NoiseMode = 0;
 
-        /* Is periodic noise active? */
-        if(PSGPeriodicNoise)
-            NoiseMode = 4;
+		//if (PSGPeriodicNoise)
+		//	NoiseMode = 3;		//Perodic noise at PSG3's frequency
+		//else if (PSGNoiseFreq)
+		//	NoiseMode = 7;		//White noise at PSG3's frequency
+
+		if (PSGPeriodicNoise)
+			NoiseMode = 4;
 
         /* Are we using the PSG3 frequency? */
         if(PSGNoiseFreq)
@@ -979,6 +1068,9 @@ void DMFConverter::NoteOn(uint8_t chan)
 
 			//Samples at end of instrument table
 			int pcmInstrIdx = TotalInstruments + InstrumentOffset + sampleIdx;
+
+			//Set PCM rate
+			esf->SetPCMRate(PCM_Freq_Default);
 
 			//PCM note on
 			esf->NoteOn(ESF_DAC, pcmInstrIdx);

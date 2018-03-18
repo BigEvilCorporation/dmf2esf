@@ -181,6 +181,24 @@ enum DMFSystem
     DMF_SYSTEM_SMS = 3,
 };
 
+enum ESFPCMRate
+{
+	PCM_Freq_26632Hz = 0x1,
+	PCM_Freq_17755Hz = 0x2,
+	PCM_Freq_13316Hz = 0x3,
+	PCM_Freq_10653Hz = 0x4,
+	PCM_Freq_8877Hz  = 0x5,
+	PCM_Freq_7609Hz  = 0x6,
+	PCM_Freq_6658Hz  = 0x7,
+	PCM_Freq_5918Hz  = 0x8,
+	PCM_Freq_5326Hz  = 0x9,
+	PCM_Freq_4842Hz  = 0xA,
+	PCM_Freq_4439Hz  = 0xB,
+	PCM_Freq_4097Hz  = 0xC,
+
+	PCM_Freq_Default = PCM_Freq_10653Hz
+};
+
 struct ChannelArray
 {
     ChannelId   aChannelId;
@@ -370,6 +388,16 @@ struct EffectNoteDelay
 	uint8_t     NoteDelayOffset;
 };
 
+struct EffectPSGNoise
+{
+	EffectPSGNoise() { Mode = EFFECT_OFF; EnvelopeSize = 0; }
+
+	EffectMode  Mode;
+	uint8_t     EnvelopeIdx;
+	uint8_t     EnvelopeSize;
+	int32_t*    EnvelopeData;
+};
+
 // EBxx (global fine tune, no support for now)
 // 17xx (DAC enable)
 
@@ -413,6 +441,7 @@ struct Channel
 	EffectNoteSlide m_effectNoteSlide;
 	EffectNoteCut m_effectNoteCut;
 	EffectNoteDelay m_effectNoteDelay;
+	EffectPSGNoise m_effectPSGNoise;
 };
 
 static const int ChannelCount[] =
@@ -742,6 +771,7 @@ public:
     void    SetParams(ESFChannel chan,uint8_t params);
 	void    SetRegisterBank0(uint8_t reg, uint8_t value);
 	void    SetRegisterBank1(uint8_t reg, uint8_t value);
+	void    SetPCMRate(uint8_t rate);
     void    GotoLoop();
     void    SetLoop();
     void    StopPlayback();
@@ -806,6 +836,7 @@ public:
                                         // multiple channels.
     bool        PSGNoiseFreq;           // 1: use PSG3 frequency
     bool        PSGPeriodicNoise;       // 1: use periodic noise
+	bool        PSGNoiseEnvelope;       // 1: use PSG noise envelope
 
     bool        DACEnabled;             // Set here because the 17xx effect can be
                                         // done on any channel.
