@@ -745,6 +745,8 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
 
 		//Decrease existing tick count
 		esf->WaitCounter -= i;
+		if (esf->WaitCounter < 0)
+			esf->WaitCounter = 0;
 	}
 
     //Process new effects

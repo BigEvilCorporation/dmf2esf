@@ -755,7 +755,7 @@ public:
 
 	uint8_t     InstrumentOffset;
 
-    uint32_t    WaitCounter; // just increase every time you want to wait...
+    int32_t    WaitCounter; // just increase every time you want to wait...
 
     ESFOutput(std::string);             // ctor
     virtual ~ESFOutput();    // dtor
