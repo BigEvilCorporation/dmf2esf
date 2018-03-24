@@ -172,21 +172,29 @@ void ESFOutput::SetFrequency(ESFChannel chan, uint16_t freq, bool processDelay)
     uint8_t esfcmd = 0x30+(int)chan;
     uint8_t esffreq1 = 0;
     uint8_t esffreq2 = 0;
-    bool    onebyte = false;
+	int numBytes = 1;
+
+	//If the 2nd byte's MSB is clear, the event is three bytes long. The 2nd
+	//and 3rd bytes specify the new frequency, the 2nd byte containing the
+	//four least significant bits(LSB aligned), and the 3rd byte containing
+	//the six most significant bits(LSB aligned too).
 
     switch(ESFChannelTypes[(int)chan])
     {
     case CHANNEL_TYPE_FM:
         esffreq1 = (uint8_t)(freq>>8);
         esffreq2 = (uint8_t)(freq & 0xFF);
+		numBytes = 2;
         break;
     case CHANNEL_TYPE_PSG:
-        esffreq1 = (uint8_t)(freq & 0x0F);
-        esffreq2 = (uint8_t)(freq>>6);
+		// Format: XXXX3210 XX987654
+        esffreq1 = (uint8_t)(freq & 0x0F);	// XXXX3210
+        esffreq2 = (uint8_t)(freq >> 4);	// XX987654
+		numBytes = 2;
         break;
     case CHANNEL_TYPE_PSG4:
-        onebyte = true;
         esffreq1 = freq & 0x07;
+		numBytes = 1;
         break;
     default:
         fprintf(stderr, "WARNING: Attempting to set frequency on a channel that doesn't support it\n");
@@ -199,13 +207,26 @@ void ESFOutput::SetFrequency(ESFChannel chan, uint16_t freq, bool processDelay)
         ESFFile<<"\tdc.b ";
         hexy(ESFFile,esfcmd,"$");
         hexy(ESFFile,esffreq1,", $");
-        if(!onebyte)
+		if (numBytes > 1)
             hexy(ESFFile,esffreq2,", $");
-		ESFFile << "\t; Set frequency '" << std::dec << (int)freq << "' (octave " << (int)(freq >> 11) << " semitone " << (int)(freq & 0x7FF) << ") for channel " << ESFChanNames[(int)chan].c_str() << "\n";
+
+		if (ESFChannelTypes[(int)chan] == CHANNEL_TYPE_FM)
+		{
+			ESFFile << "\t; Set frequency '" << std::dec << (int)freq << "' (octave " << (int)(freq >> 11) << " semitone " << (int)(freq & 0x7FF) << ") for channel " << ESFChanNames[(int)chan].c_str() << "\n";
+		}
+		else if (ESFChannelTypes[(int)chan] == CHANNEL_TYPE_PSG)
+		{
+			ESFFile << "\t; Set frequency '" << std::dec << (int)freq << "' for channel " << ESFChanNames[(int)chan].c_str() << "\n";
+		}
+		else if (ESFChannelTypes[(int)chan] == CHANNEL_TYPE_PSG4)
+		{
+			ESFFile << "\t; Set frequency '" << std::dec << (int)freq << "' for channel " << ESFChanNames[(int)chan].c_str() << "\n";
+		}
+
         return;
     }
     ESFFile<<esfcmd<<esffreq1;
-    if(!onebyte)
+	if (numBytes > 1)
         ESFFile<<esffreq2;
     return;
 }

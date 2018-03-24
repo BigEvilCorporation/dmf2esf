@@ -76,6 +76,8 @@ DMFConverter::DMFConverter(ESFOutput ** esfout) // ctor
 		Channels[i].lastPanning = 0x11;
 		Channels[i].lastAMS = 0;
 		Channels[i].lastFMS = 0;
+		Channels[i].EffectNote = 0;
+		Channels[i].EffectOctave = 0;
         LoopState[i] = Channels[i];
     }
 
@@ -284,6 +286,8 @@ bool DMFConverter::Parse()
 
 	esf->WaitCounter = 0;
 
+	bool psgNoiseUsed = false;
+
 	//Determine used channels
 	for(uint8_t CurrChannel = 0; CurrChannel < ChannelCount; CurrChannel++)
 	{
@@ -299,8 +303,20 @@ bool DMFConverter::Parse()
 					UsedChannels.insert(CurrChannel);
 					Used = true;
 				}
+
+				for (int EffectCounter = 0; EffectCounter < m_dmfFile.m_channels[CurrChannel].m_numEffects; EffectCounter++)
+				{
+					uint8_t EffectType = m_dmfFile.m_channels[CurrChannel].m_patternPages[CurrPattern].m_notes[CurrRow].m_effects[EffectCounter].m_effectType;
+					psgNoiseUsed |= (EffectType == EFFECT_TYPE_PSG_NOISE);
+				}
 			}
 		}
+	}
+
+	if (psgNoiseUsed)
+	{
+		UsedChannels.insert(CHANNEL_PSG3);
+		UsedChannels.insert(CHANNEL_PSG4);
 	}
 
 	//Determine instruments using LFO
@@ -355,7 +371,7 @@ bool DMFConverter::Parse()
             /* Parse pattern data */
 			for(uint8_t CurrChannel = 0; CurrChannel<ChannelCount; CurrChannel++)
             {
-				if(this->ParseChannelRow(CurrChannel, CurrPattern, CurrRow))
+				if(this->ParseChannelRow(ChannelProcessOrder[CurrChannel], CurrPattern, CurrRow))
                 {
                     fprintf(stderr, "Could not parse module data.\n");
                     return 1;
@@ -670,16 +686,16 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
     /* Note on? */
     else if(Channels[chan].Note != 0)
     {
-		//Save last note/octave for effects in subsequent rows
-		Channels[chan].LastNote = Channels[chan].Note;
-		Channels[chan].LastOctave = Channels[chan].Octave;
-
-        /* Convert octave/note format to something that makes more sense */
+        //Notes were 1-based, now 0-based from here
         if(Channels[chan].Note == 12)
         {
             Channels[chan].Octave++;
             Channels[chan].Note = 0;
         }
+
+		//Save last note/octave for effects in subsequent rows
+		Channels[chan].EffectNote = Channels[chan].Note;
+		Channels[chan].EffectOctave = Channels[chan].Octave;
 
         #if MODDATA
             fprintf(stdout, "%s%x ",NoteNames[Channels[chan].Note].c_str(),(int)Channels[chan].Octave);
@@ -848,7 +864,7 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
 		case EFFECT_TYPE_PORTMENTO_UP: // Portamento up
 		case EFFECT_TYPE_PORTMENTO_DOWN: // Portamento down
 			//TODO: Fix for PSG
-			if(chan < CHANNEL_PSG1)
+			//if(chan < CHANNEL_PSG1)
 			{
 				if(EffectParam == 0)
 				{
@@ -862,8 +878,25 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
 					//If note on this tick or effect was off, start from last note/octave
 					if(channel.m_effectPortmento.NoteOnthisTick || channel.m_effectPortmento.Porta == EFFECT_OFF)
 					{
-						channel.m_effectPortmento.Semitone = FMFreqs[channel.LastNote];
-						channel.m_effectPortmento.Octave = channel.LastOctave;
+						//If PSG3, and PSG4 is in noise mode, take PSG4 octave/note
+						if (chan == CHANNEL_PSG3 && PSGNoiseFreq)
+						{
+							int octave = Channels[CHANNEL_PSG4].EffectOctave;
+							int note = Channels[CHANNEL_PSG4].EffectNote;
+							channel.m_effectPortmento.Semitone = PSGFreqs[note][octave];
+							channel.m_effectPortmento.Octave = octave;
+						}
+						else if (chan >= CHANNEL_PSG1)
+						{
+							channel.m_effectPortmento.Semitone = PSGFreqs[channel.EffectNote][channel.EffectOctave];
+							channel.m_effectPortmento.Octave = channel.EffectOctave;
+						}
+						else
+						{
+							channel.m_effectPortmento.Semitone = FMFreqs[channel.EffectNote];
+							channel.m_effectPortmento.Octave = channel.EffectOctave;
+						}
+						
 						channel.m_effectPortmento.Stage = EFFECT_STAGE_INITIALISE;
 					}
 
@@ -932,6 +965,83 @@ EffectStage DMFConverter::GetActiveEffectStage(uint8_t chan)
 	return EFFECT_STAGE_OFF;
 }
 
+void SlideFM(uint8_t& octave, uint32_t& semitone, EffectMode& effectState, int16_t delta)
+{
+	//Increment/decrement frequency
+	semitone += delta;
+
+	if (delta > 0)
+	{
+		//Clamp to max octave+freq
+		if (octave == MaxOctave && semitone > FMFreqs[MaxFMFreqs - 1])
+		{
+			semitone = FMFreqs[MaxFMFreqs - 1];
+			effectState = EFFECT_OFF;
+		}
+	}
+	else if (delta < 0)
+	{
+		//Clamp to min octave+freq
+		if (octave == 0 && semitone < FMFreqs[0])
+		{
+			semitone = FMFreqs[0];
+			effectState = EFFECT_OFF;
+		}
+	}
+
+	//Wrap around octave
+	if (semitone < FMFreqs[0])
+	{
+		semitone = FMFreqs[MaxFMFreqs - 1];
+		octave--;
+	}
+
+	if (semitone > FMFreqs[MaxFMFreqs - 1])
+	{
+		semitone = FMFreqs[0];
+		octave++;
+	}
+}
+
+void SlidePSG(uint8_t& octave, uint32_t& semitone, EffectMode& effectState, int16_t delta)
+{
+	//Increment/decrement frequency (reverse for PSG)
+	semitone -= delta;
+
+	if (delta > 0)
+	{
+		//Clamp to max octave+freq
+		if (octave == MaxOctave && semitone < PSGFreqs[MaxPSGFreqs - 1][MaxOctave - 1])
+		{
+			semitone = PSGFreqs[MaxPSGFreqs - 1][MaxOctave - 1];
+			effectState = EFFECT_OFF;
+		}
+
+		//Wrap around octave
+		if (semitone > PSGFreqs[MaxPSGFreqs - 1][MaxOctave - 1])
+		{
+			octave++;
+			semitone = PSGFreqs[MaxPSGFreqs - 1][MaxOctave - 1];
+		}
+	}
+	else if (delta < 0)
+	{
+		//Clamp to min octave+freq
+		if (octave == 0 && semitone > PSGFreqs[0][0])
+		{
+			semitone = PSGFreqs[0][0];
+			effectState = EFFECT_OFF;
+		}
+
+		//Wrap around octave
+		if (semitone < PSGFreqs[0][octave])
+		{
+			octave--;
+			semitone = PSGFreqs[0][octave];
+		}
+	}
+}
+
 int DMFConverter::ProcessActiveEffects(uint8_t chan)
 {
 	Channel& channel = Channels[chan];
@@ -948,46 +1058,37 @@ int DMFConverter::ProcessActiveEffects(uint8_t chan)
 		}
 		else
 		{
-			//Increment/decrement frequency
-			if(channel.m_effectPortmento.Porta == EFFECT_UP)
-			{
-				channel.m_effectPortmento.Semitone += channel.m_effectPortmento.PortaSpeed;
+			//Sign extend
+			uint16_t speed = (uint16_t)channel.m_effectPortmento.PortaSpeed;
 
-				//Clamp to max octave+freq
-				if(channel.m_effectPortmento.Octave == MaxOctave && channel.m_effectPortmento.Semitone > FMFreqs[MaxFMFreqs - 1])
-				{
-					channel.m_effectPortmento.Semitone = FMFreqs[MaxFMFreqs - 1];
-					channel.m_effectPortmento.Porta = EFFECT_OFF;
-				}
+			//Calc delta
+			int16_t delta = (channel.m_effectPortmento.Porta == EFFECT_UP) ? speed : -speed;
+
+			uint8_t prevOctave = channel.m_effectPortmento.Octave;
+			uint32_t prevSemitone = channel.m_effectPortmento.Semitone;
+
+			if (channel.Id < CHANNEL_PSG1)
+			{
+				SlideFM(channel.m_effectPortmento.Octave, channel.m_effectPortmento.Semitone, channel.m_effectPortmento.Porta, delta);
 			}
-			else if(channel.m_effectPortmento.Porta == EFFECT_DOWN)
+			else
 			{
-				channel.m_effectPortmento.Semitone -= channel.m_effectPortmento.PortaSpeed;
-
-				//Clamp to min octave+freq
-				if(channel.m_effectPortmento.Octave == 0 && channel.m_effectPortmento.Semitone < FMFreqs[0])
-				{
-					channel.m_effectPortmento.Semitone = FMFreqs[0];
-					channel.m_effectPortmento.Porta = EFFECT_OFF;
-				}
-			}
-
-			//Wrap around octave
-			if(channel.m_effectPortmento.Semitone < FMFreqs[0])
-			{
-				channel.m_effectPortmento.Semitone = FMFreqs[MaxFMFreqs - 1];
-				channel.m_effectPortmento.Octave--;
-			}
-
-			if(channel.m_effectPortmento.Semitone > FMFreqs[MaxFMFreqs - 1])
-			{
-				channel.m_effectPortmento.Semitone = FMFreqs[0];
-				channel.m_effectPortmento.Octave++;
+				SlidePSG(channel.m_effectPortmento.Octave, channel.m_effectPortmento.Semitone, channel.m_effectPortmento.Porta, delta);
 			}
 
 			//Set frequency
-			channel.Octave = channel.m_effectPortmento.Octave;
-			SetFrequency(chan, channel.m_effectPortmento.Semitone, false);
+			if (prevOctave != channel.m_effectPortmento.Octave || prevSemitone != channel.m_effectPortmento.Semitone)
+			{
+				channel.Octave = channel.m_effectPortmento.Octave;
+
+				//If PSG4 in noise mode, set on PSG3 instead
+				if (chan == CHANNEL_PSG4 && PSGNoiseFreq)
+				{
+					chan = CHANNEL_PSG3;
+				}
+
+				SetFrequency(chan, channel.m_effectPortmento.Semitone, false);
+			}
 		}
 
 		//Continue until next note off
@@ -1157,7 +1258,7 @@ void DMFConverter::SetFrequency(uint8_t chan, uint32_t FMSemitone, bool processD
     }
 
     /* Skip if this is the PSG3 channel and its frequency value is already used for the noise channel */
-	else if(!(Channels[chan].Id == CHANNEL_PSG3 && PSGNoiseFreq))
+	else //if(!(Channels[chan].Id == CHANNEL_PSG3 && PSGNoiseFreq))
     {
         /* Calculate frequency */
         Channels[chan].ToneFreq = 0;    // Reset if this is for a channel where this doesn't make much sense.
@@ -1170,8 +1271,7 @@ void DMFConverter::SetFrequency(uint8_t chan, uint32_t FMSemitone, bool processD
         /* PSG */
         else if(Channels[chan].Type == CHANNEL_TYPE_PSG)
         {
-            Channels[chan].Octave--;
-            Channels[chan].ToneFreq = PSGFreqs[Channels[chan].Note][Channels[chan].Octave];
+			Channels[chan].ToneFreq = FMSemitone;
         }
 
 		if(!(Channels[chan].Type == CHANNEL_TYPE_FM6 && DACEnabled == true))
@@ -1265,7 +1365,7 @@ void DMFConverter::OutputInstrument(int instrumentIdx, const char* filename)
 	{
 		DMFFile::Instrument::ParamDataPSG& paramDataIn = m_dmfFile.m_instruments[instrumentIdx].m_paramsPSG;
 
-		//Create envelope data (no loop = end stream with mute loop (FE 0F EE))
+		//Create envelope data (no loop = end stream looping last value (FE 00 FF))
 		const int loopDataSize = (paramDataIn.envelopeVolume.loopPosition == 255) ? 3 : 1;
 		const int dataSize = paramDataIn.envelopeVolume.envelopeSize + loopDataSize + 1;
 		const int streamEnd = dataSize - loopDataSize - 1;
@@ -1281,12 +1381,14 @@ void DMFConverter::OutputInstrument(int instrumentIdx, const char* filename)
 				//End of data
 				if(loopDataSize == 1)
 				{
+					//End loop point
 					data[offset++] = 0xFF;
 				}
 				else
 				{
+					//Loop last value
 					data[offset++] = 0xFE;
-					data[offset++] = 0x0F;
+					data[offset++] = 0xF - paramDataIn.envelopeVolume.envelopeData[volumeIdx - 1];
 					data[offset++] = 0xFF;
 				}
 			}

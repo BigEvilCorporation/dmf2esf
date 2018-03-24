@@ -229,6 +229,20 @@ static ChannelArray SMSChannels[] =
     {CHANNEL_PSG4, CHANNEL_TYPE_PSG4, ESF_PSG4},
 };
 
+static ChannelId ChannelProcessOrder[] =
+{
+	CHANNEL_FM1,
+	CHANNEL_FM2,
+	CHANNEL_FM3,
+	CHANNEL_FM4,
+	CHANNEL_FM5,
+	CHANNEL_FM6,
+	CHANNEL_PSG1,
+	CHANNEL_PSG2,
+	CHANNEL_PSG4,	// Process PSG 4 before 3, so PSG3 noise mode can take PSG4's last used note/octave
+	CHANNEL_PSG3
+};
+
 static std::string NoteNames[] =
 {
     "C-", "C#", "D-", "D#", "E-", "F-", "F#", "G-", "G#", "A-", "A#", "B-",
@@ -255,6 +269,7 @@ static uint16_t PSGFreqs[12][7] = // [semitone][octave]
     { 450,225,112, 56, 28, 14, 2 }, // b
 };
 
+static const int MaxPSGFreqs = 12;
 static const int MaxFMFreqs = 12;
 static const int MaxOctave = 7;
 static uint16_t FMFreqs[MaxFMFreqs] =
@@ -421,8 +436,8 @@ struct Channel
     double      ToneFreq;
     uint8_t     NewNote;
     uint8_t     NewOctave;
-	uint8_t     LastNote;
-	uint8_t     LastOctave;
+	uint8_t     EffectNote;
+	uint8_t     EffectOctave;
     int16_t     LastFreq; // difference
     int16_t     NewFreq;  // difference
     uint8_t     Instrument;
