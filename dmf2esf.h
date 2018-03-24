@@ -140,7 +140,8 @@ enum EffectType
 
 enum FMRegister
 {
-	FMREG_26_TIMER_B = 0x26
+	FMREG_22_LFO		= 0x22,
+	FMREG_26_TIMER_B	= 0x26
 };
 
 enum ESFChannel
@@ -430,6 +431,9 @@ struct Channel
     uint8_t     NewVolume;
 	uint8_t     LastVolume;
     uint8_t     SubtickFX;       // 0=none, >0=yes
+	uint8_t     lastPanning;
+	uint8_t     lastFMS;
+	uint8_t     lastAMS;
 
 	EffectArpeggio m_effectArpeggio;
 	EffectPortmento m_effectPortmento;
@@ -723,14 +727,14 @@ struct ESFFile
 	{
 		static const int sMaxOperators = 4;
 
-		uint8_t alg_fb;
-		uint8_t mul[sMaxOperators];
-		uint8_t tl[sMaxOperators];
-		uint8_t ar_rs[sMaxOperators];
-		uint8_t dr[sMaxOperators];
-		uint8_t sr[sMaxOperators];
-		uint8_t rr_sl[sMaxOperators];
-		uint8_t ssg[sMaxOperators];
+		uint8_t alg_fb;					// Algorithm and feedback
+		uint8_t mul[sMaxOperators];		// Multiplier and detune
+		uint8_t tl[sMaxOperators];		// Total level
+		uint8_t ar_rs[sMaxOperators];	// Attack rate and release scale
+		uint8_t dr[sMaxOperators];		// Decay rate and amplitude modulation
+		uint8_t sr[sMaxOperators];		// Sustain rate
+		uint8_t rr_sl[sMaxOperators];	// Release rate and sustain level
+		uint8_t ssg[sMaxOperators];		// SSG-EG
 	};
 #pragma pack(pop)
 
@@ -769,6 +773,7 @@ public:
     void    SetInstrument(ESFChannel chan,uint8_t index);
     void    LockChannel(ESFChannel chan);
     void    SetParams(ESFChannel chan,uint8_t params);
+	void    SetPan_AMS_FMS(ESFChannel chan, uint8_t pan, uint8_t AMS, uint8_t FMS);
 	void    SetRegisterBank0(uint8_t reg, uint8_t value);
 	void    SetRegisterBank1(uint8_t reg, uint8_t value);
 	void    SetPCMRate(uint8_t rate);
@@ -840,6 +845,9 @@ public:
 
     bool        DACEnabled;             // Set here because the 17xx effect can be
                                         // done on any channel.
+
+	bool        LFOEnable;
+	uint8_t     LFOFreq;
 
     Channel     Channels[10];
     Channel     LoopState[10];

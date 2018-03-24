@@ -73,6 +73,9 @@ DMFConverter::DMFConverter(ESFOutput ** esfout) // ctor
 		Channels[i].LastVolume = 0x7f;
         Channels[i].NewVolume = 0;
         Channels[i].SubtickFX = 0;
+		Channels[i].lastPanning = 0x11;
+		Channels[i].lastAMS = 0;
+		Channels[i].lastFMS = 0;
         LoopState[i] = Channels[i];
     }
 
@@ -83,6 +86,8 @@ DMFConverter::DMFConverter(ESFOutput ** esfout) // ctor
 
     DACEnabled = 0;
     PSGNoiseFreq = 0;
+	LFOEnable = 0;
+	LFOFreq = 0;
 
     return;
 }
@@ -298,6 +303,16 @@ bool DMFConverter::Parse()
 		}
 	}
 
+	//Determine instruments using LFO
+	bool usingLFO = false;
+	for (int i = 0; i < m_dmfFile.m_numInstruments && !usingLFO; i++)
+	{
+		usingLFO = m_dmfFile.m_instruments[i].m_paramsFM.lfo != 0;
+	}
+
+	//Set LFO on (using default frequency)
+	esf->SetRegisterBank0(FMREG_22_LFO, usingLFO ? (1 << 3) : 0);
+
 	if(PALMode)
 	{
 		//Set FM timer to play back PAL speed tracks
@@ -471,6 +486,10 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
     uint8_t EffectType;
     uint8_t EffectParam;
 
+	uint8_t panning = Channels[chan].lastPanning;
+	uint8_t FMS = Channels[chan].lastFMS;
+	uint8_t AMS = Channels[chan].lastAMS;
+
     //Clean up effects
     channel.m_effectNoteCut.NoteCut = EFFECT_OFF;
     channel.m_effectNoteDelay.NoteDelay = EFFECT_OFF;
@@ -502,16 +521,19 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
     if(Channels[chan].NewInstrument != Channels[chan].Instrument && Channels[chan].NewInstrument != 0xff)
     {
         Channels[chan].Instrument = Channels[chan].NewInstrument;
-        if(UseTables)
-            esf->SetInstrument(Channels[chan].ESFId,InstrumentTable[Channels[chan].Instrument]);
-        else
-            esf->SetInstrument(Channels[chan].ESFId,Channels[chan].Instrument);
+		int instrumentIdx = UseTables ? InstrumentTable[Channels[chan].Instrument] : Channels[chan].Instrument;
+
+       esf->SetInstrument(Channels[chan].ESFId, instrumentIdx);
 
         /* Echo resets the volume if the instrument is changed (FM only...) */
 		if(Channels[chan].Type != CHANNEL_TYPE_PSG && Channels[chan].Type != CHANNEL_TYPE_PSG4)
 		{
 			Channels[chan].Volume = 0x7f;
 			Channels[chan].LastVolume = 0x7f;
+
+			//Set LFO and AMS
+			FMS = m_dmfFile.m_instruments[instrumentIdx].m_paramsFM.lfo;
+			AMS = m_dmfFile.m_instruments[instrumentIdx].m_paramsFM.lfo2;
 		}
     }
 
@@ -607,7 +629,23 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
 			}
             //fprintf(stderr, "effect %02x%02x: PSG noise mode %d %d\n",(int)EffectType,(int)EffectParam,(int)PSGNoiseFreq,(int)PSGPeriodicNoise);
         }
+		else if (EffectType == EFFECT_TYPE_PAN) // Set panning
+		{
+			if (Channels[chan].Type == CHANNEL_TYPE_FM || Channels[chan].Type == CHANNEL_TYPE_FM6)
+			{
+				panning = EffectParam;
+			}
+		}
     }
+
+	// Update pan/AMS/FMS register
+	if (panning != channel.lastPanning || AMS != channel.lastAMS || FMS != channel.lastFMS)
+	{
+		esf->SetPan_AMS_FMS(Channels[chan].ESFId, panning, AMS, FMS);
+		channel.lastPanning = panning;
+		channel.lastAMS = AMS;
+		channel.lastFMS = FMS;
+	}
 
     /* Is this a note off? */
 	if(Channels[chan].Note == NOTE_OFF)
@@ -620,6 +658,7 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
         Channels[chan].ToneFreq = 0;
         Channels[chan].LastFreq = 0;
         Channels[chan].NewFreq = 0;
+		Channels[chan].lastPanning = 0x11;
 
 		//Turn off effects which stop at note off
 		channel.m_effectPortaNote.PortaNote = EFFECT_OFF;
@@ -840,10 +879,6 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
 			//channel.m_effectPortaNote.PortaNoteCurrentOctave = Channels[chan].Octave;
 			//channel.m_effectPortaNote.PortaNoteTargetNote = nextNote;
 			//channel.m_effectPortaNote.PortaNoteTargetOctave = nextOctave;
-            break;
-		case EFFECT_TYPE_PAN: // Set panning
-            if(Channels[chan].Type == CHANNEL_TYPE_FM || Channels[chan].Type == CHANNEL_TYPE_FM6)
-                esf->SetParams(Channels[chan].ESFId,(EffectParam & 0x10)<<3 | (EffectParam & 0x01)<<6);
             break;
 		case EFFECT_TYPE_SET_SPEED_1: // Set speed 1
             TickTimeEvenRow = EffectParam;
@@ -1166,7 +1201,7 @@ void DMFConverter::OutputInstrument(int instrumentIdx, const char* filename)
 		DMFFile::Instrument::ParamDataFM& paramDataIn = m_dmfFile.m_instruments[instrumentIdx].m_paramsFM;
 		ESFFile::ParamDataFM paramDataOut;
 
-		paramDataOut.alg_fb = (paramDataIn.alg | (paramDataIn.fb << 3));
+		paramDataOut.alg_fb = (paramDataIn.alg | (paramDataIn.fb << 3));	// Algorithm | feedback
 
 		if(VerboseLog)
 		{
@@ -1206,13 +1241,13 @@ void DMFConverter::OutputInstrument(int instrumentIdx, const char* filename)
 				dt = dttable[opData.dt] & 0x3;
 			}
 
-			paramDataOut.mul[i] = (opData.mul | (dt << 4));
-			paramDataOut.tl[i] = opData.tl;
-			paramDataOut.ar_rs[i] = (opData.ar | (opData.rs << 6));
-			paramDataOut.dr[i] = (opData.dr | (opData.am << 7));
-			paramDataOut.sr[i] = opData.d2r;
-			paramDataOut.rr_sl[i] = (opData.rr | (opData.sl << 4));
-			paramDataOut.ssg[i] = opData.ssg;
+			paramDataOut.mul[i] = (opData.mul | (dt << 4));			// Multiplier | detune
+			paramDataOut.tl[i] = opData.tl;							// Total level
+			paramDataOut.ar_rs[i] = (opData.ar | (opData.rs << 6));	// Attack rate | release scale
+			paramDataOut.dr[i] = (opData.dr | (opData.am << 7));	// Decay rate | amplitude modulation
+			paramDataOut.sr[i] = opData.d2r;						// Sustain rate
+			paramDataOut.rr_sl[i] = (opData.rr | (opData.sl << 4));	// Release rate | sustain level
+			paramDataOut.ssg[i] = opData.ssg;						// SSG-EG
 		}
 
 		if(FILE* file = fopen(filename, "wb"))

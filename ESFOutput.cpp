@@ -263,6 +263,35 @@ void ESFOutput::SetParams(ESFChannel chan, uint8_t params)
     return;
 }
 
+void ESFOutput::SetPan_AMS_FMS(ESFChannel chan, uint8_t pan, uint8_t AMS, uint8_t FMS)
+{
+	this->Wait();
+	uint8_t esfcmd = 0xf0 + (int)chan;
+
+	// Panning = %000L000R
+	uint8_t panL = (pan & 0x10) >> 4;
+	uint8_t panR = (pan & 0x01);
+	uint8_t regB4Pan = (panL << 7) | (panR << 6);
+
+	// %LRAA0FFF
+	// L = left
+	// R = right
+	// A = AMS
+	// F = FMS
+	uint8_t regB4 = regB4Pan | (AMS << 4) | FMS;
+ 
+	if (ASMOut)
+	{
+		ESFFile << "\tdc.b ";
+		hexy(ESFFile, esfcmd, "$");
+		hexy(ESFFile, regB4, ", $");
+		ESFFile << "\t; Set pan/AMS/FMS for channel " << ESFChanNames[(int)chan].c_str() << "\n";
+		return;
+	}
+	ESFFile << esfcmd << regB4;
+	return;
+}
+
 void ESFOutput::SetRegisterBank0(uint8_t reg, uint8_t value)
 {
 	uint16_t esfcmd = 0xF8;
