@@ -25,7 +25,7 @@ int main(int argc, char *argv[])
     fprintf(stdout, "Copyright 2013-2014 ctr.\n");
 	fprintf(stdout, "Extended by Big Evil Corporation 2017.\n");
     fprintf(stdout, "Licensed under GPLv2, see LICENSE.txt.\n\n");
-	fprintf(stdout, "Includes source from Secret Rabbit Code, licensed under GPLv1, see libsamplerate\\COPYING.\n\n");
+	fprintf(stdout, "Includes source from Secret Rabbit Code, see libsamplerate\\COPYING.\n\n");
 
 	bool error = false;
 

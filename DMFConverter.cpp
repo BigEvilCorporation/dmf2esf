@@ -881,14 +881,14 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
 						//If PSG3, and PSG4 is in noise mode, take PSG4 octave/note
 						if (chan == CHANNEL_PSG3 && PSGNoiseFreq)
 						{
-							int octave = Channels[CHANNEL_PSG4].EffectOctave;
+							int octave = Channels[CHANNEL_PSG4].EffectOctave - 1;
 							int note = Channels[CHANNEL_PSG4].EffectNote;
 							channel.m_effectPortmento.Semitone = PSGFreqs[note][octave];
 							channel.m_effectPortmento.Octave = octave;
 						}
 						else if (chan >= CHANNEL_PSG1)
 						{
-							channel.m_effectPortmento.Semitone = PSGFreqs[channel.EffectNote][channel.EffectOctave];
+							channel.m_effectPortmento.Semitone = PSGFreqs[channel.EffectNote][channel.EffectOctave - 1];
 							channel.m_effectPortmento.Octave = channel.EffectOctave;
 						}
 						else
@@ -976,7 +976,6 @@ void SlideFM(uint8_t& octave, uint32_t& semitone, EffectMode& effectState, int16
 		if (octave == MaxOctave && semitone > FMFreqs[MaxFMFreqs - 1])
 		{
 			semitone = FMFreqs[MaxFMFreqs - 1];
-			effectState = EFFECT_OFF;
 		}
 	}
 	else if (delta < 0)
@@ -985,7 +984,6 @@ void SlideFM(uint8_t& octave, uint32_t& semitone, EffectMode& effectState, int16
 		if (octave == 0 && semitone < FMFreqs[0])
 		{
 			semitone = FMFreqs[0];
-			effectState = EFFECT_OFF;
 		}
 	}
 
@@ -1014,7 +1012,6 @@ void SlidePSG(uint8_t& octave, uint32_t& semitone, EffectMode& effectState, int1
 		if (octave == MaxOctave && semitone < PSGFreqs[MaxPSGFreqs - 1][MaxOctave - 1])
 		{
 			semitone = PSGFreqs[MaxPSGFreqs - 1][MaxOctave - 1];
-			effectState = EFFECT_OFF;
 		}
 
 		//Wrap around octave
@@ -1030,7 +1027,6 @@ void SlidePSG(uint8_t& octave, uint32_t& semitone, EffectMode& effectState, int1
 		if (octave == 0 && semitone > PSGFreqs[0][0])
 		{
 			semitone = PSGFreqs[0][0];
-			effectState = EFFECT_OFF;
 		}
 
 		//Wrap around octave
@@ -1187,7 +1183,7 @@ void DMFConverter::NoteOn(uint8_t chan)
         else if(Channels[chan].Type == CHANNEL_TYPE_PSG)
         {
             Channels[chan].Octave--;
-            Channels[chan].ToneFreq = PSGFreqs[Channels[chan].Note][Channels[chan].Octave];
+            Channels[chan].ToneFreq = PSGFreqs[Channels[chan].Note][Channels[chan].Octave - 1];
         }
 
         /* Reset last tone / new tone freqs */
