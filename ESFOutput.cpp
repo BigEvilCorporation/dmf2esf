@@ -240,11 +240,11 @@ void ESFOutput::SetInstrument(ESFChannel chan, uint8_t index)
     {
         ESFFile<<"\tdc.b ";
         hexy(ESFFile,esfcmd,"$");
-		hexy(ESFFile, index + InstrumentOffset, ", $");
+		hexy(ESFFile, index /*+ InstrumentOffset*/, ", $");
         ESFFile<<"\t; Set instrument for channel "<<ESFChanNames[(int)chan].c_str()<<"\n";
         return;
     }
-    ESFFile<<esfcmd<<(index+InstrumentOffset);
+    ESFFile<<esfcmd<<(index /*+ InstrumentOffset*/);
     return;
 }
 

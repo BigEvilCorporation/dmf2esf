@@ -6,8 +6,16 @@ bool OutputInstruments = false;
 bool ASMOut = false;
 bool ExCommands = false;
 
+static uint32_t waitDebugger = 1;
+
 int main(int argc, char *argv[])
 {
+	//while (waitDebugger)
+	{
+		if(++waitDebugger > 100)
+			waitDebugger = 1;
+	}
+
     int     InputId = 0;
     int     OutputId = 0;
     int     Opt = 0;
@@ -153,6 +161,7 @@ int main(int argc, char *argv[])
     }
     else
     {
+#if 0
         if(configFile)
         {
             fprintf(stdout, "Loading ini: %s\n",configFile);
@@ -197,7 +206,7 @@ int main(int argc, char *argv[])
                     esf = new ESFOutput(output);
                     dmf = new DMFConverter(&esf);
 
-                    FindInstruments(IniSection,ini,dmf);
+                    //FindInstruments(IniSection,ini,dmf);
 
                     if(dmf->Initialize(input.c_str()))
                     {
@@ -223,6 +232,7 @@ int main(int argc, char *argv[])
             delete ini;
         }
         else
+#endif
         {
 			for(int i = 0; i < filenames.size(); i++)
 			{
@@ -241,7 +251,8 @@ int main(int argc, char *argv[])
 				dmf->LoopWholeTrack = file.loopWholeTrack;
 				dmf->LockChannels = file.lockChannels;
 
-				if(dmf->Initialize(file.InFilename.c_str()))
+				//Initialize, and write all instruments if last file
+				if(dmf->Initialize(file.InFilename.c_str(), i == (filenames.size() - 1)))
 				{
 					fprintf(stderr, "Aborting\n");
 					return EXIT_FAILURE;

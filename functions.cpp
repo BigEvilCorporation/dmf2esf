@@ -28,6 +28,7 @@ uint16_t fmfreq2(long a)
     long    temp = (a/12)*2048;
     return  ((int)temp2 & 2047) + temp;
 }
+/*
 void FindInstruments(char * inisection, INIReader *ini, DMFConverter *dmf)
 {
     const std::string samplenotes[] = {
@@ -40,7 +41,7 @@ void FindInstruments(char * inisection, INIReader *ini, DMFConverter *dmf)
 
     for(inst_counter=0;inst_counter<256;inst_counter++)
     {
-        /* find instruments */
+        // find instruments
         sprintf(search_string,"ins_%02x",inst_counter);
         dmf->InstrumentTable[inst_counter] = (uint8_t) ini->GetInteger(inisection,search_string,0);
         #if DEBUG
@@ -49,7 +50,7 @@ void FindInstruments(char * inisection, INIReader *ini, DMFConverter *dmf)
         #endif
         if(inst_counter<12)
         {
-            /* find samples */
+            // find samples
             sprintf(search_string,"pcm_%s",samplenotes[inst_counter].c_str());
             dmf->SampleTable[inst_counter] = (uint8_t) ini->GetInteger(inisection,search_string,0);
             #if DEBUG
@@ -60,3 +61,4 @@ void FindInstruments(char * inisection, INIReader *ini, DMFConverter *dmf)
     }
     return;
 }
+*/

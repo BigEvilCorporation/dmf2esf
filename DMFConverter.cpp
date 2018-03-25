@@ -3,6 +3,10 @@
 
 #include <set>
 
+std::vector<DMFFile::InstrumentMapEntry> DMFFile::s_allInstruments;
+std::map<uint8_t, uint8_t> DMFFile::s_instrumentRemap;
+std::map<uint8_t, uint8_t> DMFFile::s_sampleRemap;
+
 template <typename T> T Clamp(T value, T min, T max)
 {
 	T clamped = value;
@@ -50,7 +54,6 @@ DMFConverter::DMFConverter(ESFOutput ** esfout) // ctor
     ChannelCount = 0;
     RegionType = 0;
 
-	UseTables = false;
 	VerboseLog = false;
 
     //NoiseMode = PSG_WHITE_NOISE_HI;
@@ -102,7 +105,7 @@ DMFConverter::~DMFConverter() // dtor
 }
 
 /** @brief Initializes module **/
-bool DMFConverter::Initialize(const char* Filename)
+bool DMFConverter::Initialize(const char* Filename, bool outputInstruments)
 {
     /* Open file */
     streampos   file_size;
@@ -210,6 +213,150 @@ bool DMFConverter::Initialize(const char* Filename)
 			TotalInstruments = m_dmfFile.m_numInstruments;
 			TotalSamples = m_dmfFile.m_numSamples;
 
+			//Find duplicate instruments
+			int firstInstrumentIdx = DMFFile::s_allInstruments.size();
+			for (int i = 0; i < m_dmfFile.m_numInstruments; i++)
+			{
+				int duplicateIdx = -1;
+				for (int j = 0; j < DMFFile::s_allInstruments.size() && duplicateIdx < 0; j++)
+				{
+					if (DMFFile::s_allInstruments[j] == m_dmfFile.m_instruments[i])
+					{
+						duplicateIdx = j;
+					}
+				}
+
+				if (duplicateIdx >= 0)
+				{
+					//Found duplicate, remap
+					DMFFile::s_instrumentRemap[firstInstrumentIdx + i] = duplicateIdx;
+				}
+				else
+				{
+					//New instrument, add to global list
+					DMFFile::s_allInstruments.push_back(m_dmfFile.m_instruments[i]);
+
+					//Remap to new index
+					DMFFile::s_instrumentRemap[firstInstrumentIdx + i] = DMFFile::s_allInstruments.size() - 1;
+				}
+			}
+
+			//Find duplicate samples
+			int firstSampleIdx = DMFFile::s_allInstruments.size();
+			for (int i = 0; i < m_dmfFile.m_numSamples; i++)
+			{
+				int duplicateIdx = -1;
+				for (int j = 0; j < DMFFile::s_allInstruments.size() && duplicateIdx < 0; j++)
+				{
+					if (DMFFile::s_allInstruments[j] == m_dmfFile.m_samples[i])
+					{
+						duplicateIdx = j;
+					}
+				}
+
+				if (duplicateIdx >= 0)
+				{
+					//Found duplicate, remap
+					DMFFile::s_sampleRemap[firstSampleIdx + i] = duplicateIdx;
+				}
+				else
+				{
+					//New instrument, add to global list
+					DMFFile::s_allInstruments.push_back(m_dmfFile.m_samples[i]);
+
+					//Remap to new index
+					DMFFile::s_sampleRemap[firstSampleIdx + i] = DMFFile::s_allInstruments.size() - 1;
+				}
+			}
+
+			//Remap all instrument references in stream
+			for (uint8_t CurrChannel = 0; CurrChannel < ChannelCount; CurrChannel++)
+			{
+				for (uint8_t CurrPattern = 0; CurrPattern < TotalPatterns; CurrPattern++)
+				{
+					for (uint8_t CurrRow = 0; CurrRow < TotalRowsPerPattern; CurrRow++)
+					{
+						int16_t originalIdx = (int16_t)m_dmfFile.m_channels[CurrChannel].m_patternPages[CurrPattern].m_notes[CurrRow].m_instrument;
+						if (originalIdx >= 0)
+						{
+							uint16_t offsetIdx = originalIdx + firstInstrumentIdx;
+
+							//Get remapped instrument
+							std::map<uint8_t, uint8_t>::const_iterator it = DMFFile::s_instrumentRemap.find(offsetIdx);
+
+							printf("Remapped instr %i to %i\n", originalIdx, it->second);
+
+							//Set new instrument
+							m_dmfFile.m_channels[CurrChannel].m_patternPages[CurrPattern].m_notes[CurrRow].m_instrument = it->second;
+						}
+					}
+				}
+			}
+
+			//Remap all PCM NoteOn samples to instruments
+			for (uint8_t CurrChannel = 0; CurrChannel < ChannelCount; CurrChannel++)
+			{
+				bool PCMChannel = false;
+
+				for (uint8_t CurrPattern = 0; CurrPattern < TotalPatterns; CurrPattern++)
+				{
+					for (uint8_t CurrRow = 0; CurrRow < TotalRowsPerPattern; CurrRow++)
+					{
+						for (uint8_t EffectCounter = 0; EffectCounter < m_dmfFile.m_channels[CurrChannel].m_numEffects; EffectCounter++)
+						{
+							uint16_t EffectType = m_dmfFile.m_channels[CurrChannel].m_patternPages[CurrPattern].m_notes[CurrRow].m_effects[EffectCounter].m_effectType;
+							uint16_t EffectParam = m_dmfFile.m_channels[CurrChannel].m_patternPages[CurrPattern].m_notes[CurrRow].m_effects[EffectCounter].m_effectValue;
+
+							if (EffectType == EFFECT_TYPE_DAC_ON)
+							{
+								//Toggle DAC on/off for channel
+								PCMChannel = (EffectParam > 0);
+							}
+						}
+
+						if (PCMChannel)
+						{
+							uint16_t note = m_dmfFile.m_channels[CurrChannel].m_patternPages[CurrPattern].m_notes[CurrRow].m_note;
+
+							if (note != 0 && note != NOTE_OFF)
+							{
+								if (note == 12)
+									note = 0;
+
+								uint8_t offsetIdx = note + firstSampleIdx;
+
+								//Get remapped sample
+								std::map<uint8_t, uint8_t>::const_iterator it = DMFFile::s_sampleRemap.find(offsetIdx);
+
+								printf("Remapped sample %i to instr %i (duplicate)\n", note, it->second);
+
+								//Set new instrument
+								m_dmfFile.m_channels[CurrChannel].m_patternPages[CurrPattern].m_notes[CurrRow].m_instrument = it->second;
+							}
+						}
+					}
+				}
+			}
+
+			if(outputInstruments)
+			{
+				for(int i = 0; i < m_dmfFile.s_allInstruments.size(); i++)
+				{
+					char filename[FILENAME_MAX] = { 0 };
+					sprintf_s(filename, FILENAME_MAX, "instr_%02x.ins", i);
+
+					if (m_dmfFile.s_allInstruments[i].m_type == DMFFile::INSTRUMENT_PCM)
+					{
+						OutputSample(m_dmfFile.s_allInstruments[i].m_sample, filename, false);
+					}
+					else
+					{
+						OutputInstrument(m_dmfFile.s_allInstruments[i].m_instrument, filename);
+					}
+				}
+			}
+
+#if 0
 			for(int i = 0; i < m_dmfFile.m_numInstruments; i++)
 			{
 				char filename[FILENAME_MAX] = { 0 };
@@ -233,6 +380,7 @@ bool DMFConverter::Initialize(const char* Filename)
 				sprintf_s(filename, FILENAME_MAX, "instr_%02x.ewf", i + TotalInstruments + InstrumentOffset);
 				OutputSample(i, filename, false);
 			}
+#endif
 
             /* Finally build the pattern offset table */
             PatternData = new uint32_t[ChannelCount];
@@ -516,14 +664,6 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
 	channel.NewVolume = m_dmfFile.m_channels[chan].m_patternPages[CurrPattern].m_notes[CurrRow].m_volume;
 	channel.NewInstrument = m_dmfFile.m_channels[chan].m_patternPages[CurrPattern].m_notes[CurrRow].m_instrument;
 
-	//Get instrument
-	const DMFFile::Instrument* instrument = NULL;
-	
-	if (channel.NewInstrument >= 0 && channel.NewInstrument < m_dmfFile.m_numInstruments)
-	{
-		instrument = &m_dmfFile.m_instruments[channel.NewInstrument];
-	}
-
 	uint8_t nextNote = 0;
 	uint8_t nextOctave = 0;
 
@@ -534,24 +674,27 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
 	}
 
     /* Instrument updated? */
-    if(Channels[chan].NewInstrument != Channels[chan].Instrument && Channels[chan].NewInstrument != 0xff)
-    {
-        Channels[chan].Instrument = Channels[chan].NewInstrument;
-		int instrumentIdx = UseTables ? InstrumentTable[Channels[chan].Instrument] : Channels[chan].Instrument;
-
-       esf->SetInstrument(Channels[chan].ESFId, instrumentIdx);
-
-        /* Echo resets the volume if the instrument is changed (FM only...) */
-		if(Channels[chan].Type != CHANNEL_TYPE_PSG && Channels[chan].Type != CHANNEL_TYPE_PSG4)
+	if (chan != CHANNEL_FM6 || !DACEnabled)	// PCM is an Echo instrument, but uses NoteOn to set+play
+	{
+		if (Channels[chan].NewInstrument != Channels[chan].Instrument && Channels[chan].NewInstrument != 0xff)
 		{
-			Channels[chan].Volume = 0x7f;
-			Channels[chan].LastVolume = 0x7f;
+			Channels[chan].Instrument = Channels[chan].NewInstrument;
+			int instrumentIdx = Channels[chan].Instrument;
 
-			//Set LFO and AMS
-			FMS = m_dmfFile.m_instruments[instrumentIdx].m_paramsFM.lfo;
-			AMS = m_dmfFile.m_instruments[instrumentIdx].m_paramsFM.lfo2;
+			esf->SetInstrument(Channels[chan].ESFId, instrumentIdx);
+
+			/* Echo resets the volume if the instrument is changed (FM only...) */
+			if (Channels[chan].Type != CHANNEL_TYPE_PSG && Channels[chan].Type != CHANNEL_TYPE_PSG4)
+			{
+				Channels[chan].Volume = 0x7f;
+				Channels[chan].LastVolume = 0x7f;
+
+				//Set LFO and AMS
+				FMS = DMFFile::s_allInstruments[instrumentIdx].m_instrument.m_paramsFM.lfo;
+				AMS = DMFFile::s_allInstruments[instrumentIdx].m_instrument.m_paramsFM.lfo2;
+			}
 		}
-    }
+	}
 
     /* Volume updated? */
     if(Channels[chan].NewVolume != Channels[chan].Volume && Channels[chan].NewVolume != 0xff)
@@ -1193,21 +1336,16 @@ void DMFConverter::NoteOn(uint8_t chan)
 
         if((Channels[chan].Type == CHANNEL_TYPE_FM6 && DACEnabled == true))
         {
-			int sampleIdx = 0;
-
-			if(UseTables)
-				sampleIdx = SampleTable[Channels[chan].Note];
-            else
-				sampleIdx = Channels[chan].Note;
+			int sampleInstrumentIdx = Channels[chan].Instrument; // Channels[chan].Note;
 
 			//Samples at end of instrument table
-			int pcmInstrIdx = TotalInstruments + InstrumentOffset + sampleIdx;
+			//int pcmInstrIdx = /*TotalInstruments + InstrumentOffset +*/ sampleIdx;
 
 			//Set PCM rate
 			esf->SetPCMRate(PCM_Freq_Default);
 
 			//PCM note on
-			esf->NoteOn(ESF_DAC, pcmInstrIdx);
+			esf->NoteOn(ESF_DAC, sampleInstrumentIdx);
         }
         else
         {
@@ -1287,14 +1425,14 @@ void DMFConverter::SetFrequency(uint8_t chan, uint32_t FMSemitone, bool processD
 }
 
 /** Extracts FM instrument data and stores as params for the EIF macro */
-void DMFConverter::OutputInstrument(int instrumentIdx, const char* filename)
+void DMFConverter::OutputInstrument(const DMFFile::Instrument& instrument, const char* filename)
 {
     static int optable[] = {1,2,3,4};
     static int8_t dttable[] = {-3,-2,-1,0,1,2,3};
 
-	if(m_dmfFile.m_instruments[instrumentIdx].m_mode == DMFFile::INSTRUMENT_FM)
+	if (instrument.m_mode == DMFFile::INSTRUMENT_FM)
 	{
-		DMFFile::Instrument::ParamDataFM& paramDataIn = m_dmfFile.m_instruments[instrumentIdx].m_paramsFM;
+		const DMFFile::Instrument::ParamDataFM& paramDataIn = instrument.m_paramsFM;
 		ESFFile::ParamDataFM paramDataOut;
 
 		paramDataOut.alg_fb = (paramDataIn.alg | (paramDataIn.fb << 3));	// Algorithm | feedback
@@ -1307,7 +1445,7 @@ void DMFConverter::OutputInstrument(int instrumentIdx, const char* filename)
 
 		for(int i = 0; i < DMFFile::sMaxOperators; i++)
 		{
-			DMFFile::Instrument::ParamDataFM::Operator& opData = paramDataIn.m_operators[i];
+			const DMFFile::Instrument::ParamDataFM::Operator& opData = paramDataIn.m_operators[i];
 
 			int op = optable[i];
 
@@ -1359,7 +1497,7 @@ void DMFConverter::OutputInstrument(int instrumentIdx, const char* filename)
 	}
 	else
 	{
-		DMFFile::Instrument::ParamDataPSG& paramDataIn = m_dmfFile.m_instruments[instrumentIdx].m_paramsPSG;
+		const DMFFile::Instrument::ParamDataPSG& paramDataIn = instrument.m_paramsPSG;
 
 		//Create envelope data (no loop = end stream looping last value (FE 00 FF))
 		const int loopDataSize = (paramDataIn.envelopeVolume.loopPosition == 255) ? 3 : 1;
@@ -1415,10 +1553,8 @@ void DMFConverter::OutputInstrument(int instrumentIdx, const char* filename)
     return;
 }
 
-void DMFConverter::OutputSample(int sampleIdx, const char* filename, bool convertFormat)
+void DMFConverter::OutputSample(const DMFFile::Sample& sample, const char* filename, bool convertFormat)
 {
-	const DMFFile::Sample& sample = m_dmfFile.m_samples[sampleIdx];
-
 	//If correct format, skip conversion
 	const int toleranceHz = 100;
 

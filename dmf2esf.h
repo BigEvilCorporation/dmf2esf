@@ -566,7 +566,8 @@ struct DMFFile
 	enum InstrumentMode
 	{
 		INSTRUMENT_PSG,
-		INSTRUMENT_FM
+		INSTRUMENT_FM,
+		INSTRUMENT_PCM
 	};
 
 	enum FMParams
@@ -599,6 +600,13 @@ struct DMFFile
 
 	struct Instrument
 	{
+		const bool operator == (const Instrument& rhs) const
+		{
+			return (m_mode == rhs.m_mode)
+				&& ((m_mode == INSTRUMENT_FM && m_paramsFM == rhs.m_paramsFM)
+				|| (m_mode == INSTRUMENT_PSG && m_paramsPSG == rhs.m_paramsPSG));
+		}
+
 		void Serialise(Stream& stream);
 
 		std::string m_name;
@@ -606,6 +614,21 @@ struct DMFFile
 
 		struct ParamDataFM
 		{
+			const bool operator == (const ParamDataFM& rhs) const
+			{
+				bool match = (alg == rhs.alg
+							&& fb == rhs.fb
+							&& lfo == rhs.lfo
+							&& lfo2 == rhs.lfo2);
+
+				for (int i = 0; i < sMaxOperators && match; i++)
+				{
+					match = m_operators[i] == rhs.m_operators[i];
+				}
+
+				return match;
+			}
+
 			void Serialise(Stream& stream);
 
 			uint8_t alg;
@@ -615,6 +638,22 @@ struct DMFFile
 
 			struct Operator
 			{
+				const bool operator == (const Operator& rhs) const
+				{
+					return am == rhs.am
+						&& ar == rhs.ar
+						&& dr == rhs.dr
+						&& mul == rhs.mul
+						&& rr == rhs.rr
+						&& sl == rhs.sl
+						&& tl == rhs.tl
+						&& dt2 == rhs.dt2
+						&& rs == rhs.rs
+						&& dt == rhs.dt
+						&& d2r == rhs.d2r
+						&& ssg == rhs.ssg;
+				}
+
 				void Serialise(Stream& stream);
 
 				int8_t am;
@@ -636,10 +675,31 @@ struct DMFFile
 
 		struct ParamDataPSG
 		{
+			const bool operator == (const ParamDataPSG& rhs) const
+			{
+				return envelopeVolume == rhs.envelopeVolume
+					&& envelopeArpeggio == rhs.envelopeArpeggio
+					&& envelopeDutyNoise == rhs.envelopeDutyNoise
+					&& envelopeWaveTable == rhs.envelopeWaveTable
+					&& arpeggioMode == rhs.arpeggioMode;
+			}
+
 			void Serialise(Stream& stream);
 
 			struct Envelope
 			{
+				const bool operator == (const Envelope& rhs) const
+				{
+					bool match = (envelopeSize == rhs.envelopeSize && (envelopeSize == 0 || loopPosition == rhs.loopPosition));
+
+					for (int i = 0; i < envelopeSize && match; i++)
+					{
+						match = (envelopeData[i] == rhs.envelopeData[i]);
+					}
+
+					return match;
+				}
+
 				void Serialise(Stream& stream);
 
 				uint8_t envelopeSize;
@@ -694,6 +754,52 @@ struct DMFFile
 	
 	struct Sample
 	{
+		Sample()
+		{
+			m_sampleSize = 0;
+			m_sampleData = NULL;
+		}
+
+		Sample(const Sample& rhs)
+		{
+			m_sampleSize = 0;
+			m_sampleData = NULL;
+			*this = rhs;
+		}
+
+		void operator = (const Sample& rhs)
+		{
+			m_sampleSize = rhs.m_sampleSize;
+			m_name = rhs.m_name;
+			m_sampleRate = rhs.m_sampleRate;
+			m_pitch = rhs.m_pitch;
+			m_amplitude = rhs.m_amplitude;
+			m_bitsPerSample = rhs.m_bitsPerSample;
+
+			//TODO: free this
+			if (m_sampleSize > 0)
+			{
+				m_sampleData = new uint16_t[m_sampleSize];
+				memcpy(m_sampleData, rhs.m_sampleData, m_sampleSize * sizeof(uint16_t));
+			}
+		}
+
+		bool operator == (const Sample& rhs) const
+		{
+			bool match = m_sampleSize == rhs.m_sampleSize
+				&& m_sampleRate == rhs.m_sampleRate
+				&& m_amplitude == rhs.m_amplitude
+				&& m_bitsPerSample == rhs.m_bitsPerSample
+				&& m_pitch == rhs.m_pitch;
+
+			for (int i = 0; i < m_sampleSize && match; i++)
+			{
+				match = (m_sampleData[i] == rhs.m_sampleData[i]);
+			}
+
+			return match;
+		}
+
 		void Serialise(Stream& stream);
 
 		uint32_t m_sampleSize;
@@ -733,6 +839,39 @@ struct DMFFile
 	Channel m_channels[sMaxChannels];
 	uint8_t m_numSamples;
 	Sample m_samples[sMaxSamples];
+
+	struct InstrumentMapEntry
+	{
+		InstrumentMapEntry(const Instrument& instrument)
+		{
+			m_instrument = instrument;
+			m_type = (InstrumentMode)instrument.m_mode;
+		}
+
+		InstrumentMapEntry(const Sample& sample)
+		{
+			m_sample = sample;
+			m_type = INSTRUMENT_PCM;
+		}
+
+		bool operator == (const Instrument& rhs) const
+		{
+			return m_type == rhs.m_mode && m_instrument == rhs;
+		}
+
+		bool operator == (const Sample& rhs) const
+		{
+			return m_type == INSTRUMENT_PCM && m_sample == rhs;
+		}
+
+		InstrumentMode m_type;
+		Instrument m_instrument;
+		Sample m_sample;
+	};
+
+	static std::vector<InstrumentMapEntry> s_allInstruments;
+	static std::map<uint8_t, uint8_t> s_instrumentRemap;
+	static std::map<uint8_t, uint8_t> s_sampleRemap;
 };
 
 struct ESFFile
@@ -822,7 +961,6 @@ public:
 
 	std::set<uint8_t> UsedChannels;
 
-    bool        UseTables;
     uint8_t     InstrumentTable[256];   // instrument conversion table
 	uint8_t     TotalInstruments;
 	uint8_t     TotalSamples;
@@ -876,25 +1014,24 @@ public:
 
     DMFConverter(ESFOutput ** esfout);             // ctor
     virtual     ~DMFConverter();    // dtor
-    bool        Initialize(const char* Filename);     // load DMF
+	bool        Initialize(const char* Filename, bool outputInstruments);     // load DMF
     bool        Parse();    // parse DMF
 	bool        ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t CurrRow); // parse channel
 	EffectStage GetActiveEffectStage(uint8_t chan);
     int         ProcessActiveEffects(uint8_t chan);
     void        NoteOn(uint8_t chan); // checks channel type and sends appropriate command to ESF
 	void        SetFrequency(uint8_t chan, uint32_t FMSemitone, bool processDelay = true);
-	void        OutputInstrument(int instrumentIdx, const char* filename); // outputs an FM instrument or PSG envelope
-	void        OutputSample(int sampleIdx, const char* filename, bool convertFormat);
+	void        OutputInstrument(const DMFFile::Instrument& instrument, const char* filename); // outputs an FM instrument or PSG envelope
+	void        OutputSample(const DMFFile::Sample& sample, const char* filename, bool convertFormat);
 
     uint16_t    GetFreq(ChannelType chan);
-
 };
 
 /* Helper functions */
 double divrest(double a, int b);
 uint16_t fmfreq(double a);
 uint16_t fmfreq2(long a);
-void FindInstruments(char * inisection, INIReader *ini, DMFConverter *dmf);
+//void FindInstruments(char * inisection, INIReader *ini, DMFConverter *dmf);
 
 //=============================================================================
 
