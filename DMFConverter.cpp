@@ -284,7 +284,7 @@ bool DMFConverter::Initialize(const char* Filename, bool outputInstruments)
 							//Get remapped instrument
 							std::map<uint8_t, uint8_t>::const_iterator it = DMFFile::s_instrumentRemap.find(offsetIdx);
 
-							printf("Remapped instr %i to %i\n", originalIdx, it->second);
+							//printf("Remapped instr %i to %i\n", originalIdx, it->second);
 
 							//Set new instrument
 							m_dmfFile.m_channels[CurrChannel].m_patternPages[CurrPattern].m_notes[CurrRow].m_instrument = it->second;
@@ -328,7 +328,7 @@ bool DMFConverter::Initialize(const char* Filename, bool outputInstruments)
 								//Get remapped sample
 								std::map<uint8_t, uint8_t>::const_iterator it = DMFFile::s_sampleRemap.find(offsetIdx);
 
-								printf("Remapped sample %i to instr %i (duplicate)\n", note, it->second);
+								//printf("Remapped sample %i to instr %i (duplicate)\n", note, it->second);
 
 								//Set new instrument
 								m_dmfFile.m_channels[CurrChannel].m_patternPages[CurrPattern].m_notes[CurrRow].m_instrument = it->second;
@@ -520,10 +520,10 @@ bool DMFConverter::Parse()
 			for(uint8_t CurrChannel = 0; CurrChannel<ChannelCount; CurrChannel++)
             {
 				if(this->ParseChannelRow(ChannelProcessOrder[CurrChannel], CurrPattern, CurrRow))
-                {
-                    fprintf(stderr, "Could not parse module data.\n");
-                    return 1;
-                }
+				{
+					fprintf(stderr, "Could not parse module data.\n");
+					return 1;
+				}
                 //fprintf(stdout, "%#x, ", ChannelData);
             }
 
@@ -560,7 +560,7 @@ bool DMFConverter::Parse()
 							wholeDelay = true;
 						}
 
-						if(Channels[CurrChannel].m_effectPortmento.NoteOnthisTick)
+						if(Channels[CurrChannel].m_effectPortmento.Stage == EFFECT_STAGE_INITIALISE && Channels[CurrChannel].m_effectPortmento.NoteOnthisTick)
 						{
 							noteOn = true;
 						}
@@ -821,7 +821,8 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
 
 		//Turn off effects which stop at note off
 		channel.m_effectPortaNote.PortaNote = EFFECT_OFF;
-		channel.m_effectPortmento.Porta == EFFECT_OFF;
+		channel.m_effectPortmento.Porta = EFFECT_OFF;
+		channel.m_effectVibrato.mode = EFFECT_OFF;
 		channel.m_effectVolSlide.VolSlide = EFFECT_OFF;
 		channel.m_effectPSGNoise.Mode = EFFECT_OFF;
 		channel.m_effectPSGNoise.EnvelopeSize = 0;
@@ -840,6 +841,23 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
 		Channels[chan].EffectNote = Channels[chan].Note;
 		Channels[chan].EffectOctave = Channels[chan].Octave;
 
+		//If PSG3, and PSG4 is in noise mode, take PSG4 octave/note
+		if(chan == CHANNEL_PSG3 && PSGNoiseFreq)
+		{
+			int octave = Channels[CHANNEL_PSG4].EffectOctave - 1;
+			int note = Channels[CHANNEL_PSG4].EffectNote;
+			channel.EffectSemitone = PSGFreqs[note][octave];
+			channel.EffectOctave = octave;
+	}
+		else if(chan >= CHANNEL_PSG1)
+		{
+			channel.EffectSemitone = PSGFreqs[channel.EffectNote][channel.EffectOctave - 1];
+		}
+		else
+		{
+			channel.EffectSemitone = FMFreqs[channel.EffectNote];
+		}
+
         #if MODDATA
             fprintf(stdout, "%s%x ",NoteNames[Channels[chan].Note].c_str(),(int)Channels[chan].Octave);
         #endif
@@ -847,6 +865,7 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
 		//Turn off effects which stop at next note
 		channel.m_effectPortaNote.PortaNote = EFFECT_OFF;
 		channel.m_effectPortmento.Porta = EFFECT_OFF;
+		channel.m_effectVibrato.mode = EFFECT_OFF;
 		channel.m_effectVolSlide.VolSlide = EFFECT_OFF;
 
         /* Parse some effects that will affect the note on */
@@ -1004,6 +1023,39 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
 				Channels[chan].m_effectArpeggio.Arp = EFFECT_OFF;
             }
             break;
+		case EFFECT_TYPE_VIBRATO:
+		{
+			uint8_t speed = EffectParam >> 4;
+			uint8_t amplitude = EffectParam & 0xF;
+
+			speed = Clamp(speed, (uint8_t)1, (uint8_t)15);
+			amplitude = Clamp(amplitude, (uint8_t)0, (uint8_t)12);
+
+			if(speed == 0 || amplitude == 0)
+			{
+				if(channel.m_effectVibrato.stage == EFFECT_STAGE_CONTINUE)
+				{
+					channel.m_effectVibrato.stage = EFFECT_STAGE_END;
+				}
+			}
+			else
+			{
+				if(channel.m_effectVibrato.mode == EFFECT_OFF)
+				{
+					channel.m_effectVibrato.sineTime = 0;
+				}
+
+				if(channel.m_effectVibrato.stage != EFFECT_STAGE_CONTINUE)
+				{
+					channel.m_effectVibrato.stage = EFFECT_STAGE_INITIALISE;
+					channel.m_effectVibrato.mode = EFFECT_NORMAL;
+				}
+
+				channel.m_effectVibrato.sineSpeed = speed;
+				channel.m_effectVibrato.sineAmplitude = amplitude;
+			}
+			break;
+		}
 		case EFFECT_TYPE_PORTMENTO_UP: // Portamento up
 		case EFFECT_TYPE_PORTMENTO_DOWN: // Portamento down
 			//TODO: Fix for PSG
@@ -1021,30 +1073,15 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
 					//If note on this tick or effect was off, start from last note/octave
 					if(channel.m_effectPortmento.NoteOnthisTick || channel.m_effectPortmento.Porta == EFFECT_OFF)
 					{
-						//If PSG3, and PSG4 is in noise mode, take PSG4 octave/note
-						if (chan == CHANNEL_PSG3 && PSGNoiseFreq)
-						{
-							int octave = Channels[CHANNEL_PSG4].EffectOctave - 1;
-							int note = Channels[CHANNEL_PSG4].EffectNote;
-							channel.m_effectPortmento.Semitone = PSGFreqs[note][octave];
-							channel.m_effectPortmento.Octave = octave;
-						}
-						else if (chan >= CHANNEL_PSG1)
-						{
-							channel.m_effectPortmento.Semitone = PSGFreqs[channel.EffectNote][channel.EffectOctave - 1];
-							channel.m_effectPortmento.Octave = channel.EffectOctave;
-						}
-						else
-						{
-							channel.m_effectPortmento.Semitone = FMFreqs[channel.EffectNote];
-							channel.m_effectPortmento.Octave = channel.EffectOctave;
-						}
-						
 						channel.m_effectPortmento.Stage = EFFECT_STAGE_INITIALISE;
 					}
 
 					channel.m_effectPortmento.Porta = EffectType == 0x01 ? EFFECT_UP : EFFECT_DOWN;
 					channel.m_effectPortmento.PortaSpeed = EffectParam;
+
+					//Cancel vibrato
+					channel.m_effectVibrato.mode = EFFECT_OFF;
+					channel.m_effectVibrato.stage = EFFECT_STAGE_OFF;
 				}
 			}
             break;
@@ -1100,6 +1137,11 @@ EffectStage DMFConverter::GetActiveEffectStage(uint8_t chan)
 		return Channels[chan].m_effectPortmento.Stage;
 	}
 
+	if(Channels[chan].m_effectVibrato.mode != EFFECT_OFF)
+	{
+		return Channels[chan].m_effectVibrato.stage;
+	}
+
 	if (Channels[chan].m_effectPSGNoise.Mode != EFFECT_OFF)
 	{
 		return EFFECT_STAGE_CONTINUE;
@@ -1108,7 +1150,7 @@ EffectStage DMFConverter::GetActiveEffectStage(uint8_t chan)
 	return EFFECT_STAGE_OFF;
 }
 
-void SlideFM(uint8_t& octave, uint32_t& semitone, EffectMode& effectState, int16_t delta)
+void SlideFM(uint8_t& octave, uint32_t& semitone, int16_t delta)
 {
 	//Increment/decrement frequency
 	semitone += delta;
@@ -1144,11 +1186,18 @@ void SlideFM(uint8_t& octave, uint32_t& semitone, EffectMode& effectState, int16
 	}
 }
 
-void SlidePSG(uint8_t& octave, uint32_t& semitone, EffectMode& effectState, int16_t delta)
+void SlidePSG(uint8_t& octave, uint32_t& semitone, int16_t delta)
 {
 	//Increment/decrement frequency (reverse for PSG)
 	semitone -= delta;
 
+	if(semitone < PSGFreqs[MaxPSGFreqs - 1][MaxOctave - 1])
+		semitone = PSGFreqs[MaxPSGFreqs - 1][MaxOctave - 1];
+
+	if(semitone > PSGFreqs[0][0])
+		semitone = PSGFreqs[0][0];
+
+#if 0
 	if (delta > 0)
 	{
 		//Clamp to max octave+freq
@@ -1158,10 +1207,10 @@ void SlidePSG(uint8_t& octave, uint32_t& semitone, EffectMode& effectState, int1
 		}
 
 		//Wrap around octave
-		if (semitone > PSGFreqs[MaxPSGFreqs - 1][MaxOctave - 1])
+		if(semitone > PSGFreqs[MaxPSGFreqs - 1][octave])
 		{
 			octave++;
-			semitone = PSGFreqs[MaxPSGFreqs - 1][MaxOctave - 1];
+			semitone = PSGFreqs[0][octave];
 		}
 	}
 	else if (delta < 0)
@@ -1176,9 +1225,10 @@ void SlidePSG(uint8_t& octave, uint32_t& semitone, EffectMode& effectState, int1
 		if (semitone < PSGFreqs[0][octave])
 		{
 			octave--;
-			semitone = PSGFreqs[0][octave];
+			semitone = PSGFreqs[MaxPSGFreqs - 1][octave];
 		}
 	}
+#endif
 }
 
 int DMFConverter::ProcessActiveEffects(uint8_t chan)
@@ -1203,22 +1253,22 @@ int DMFConverter::ProcessActiveEffects(uint8_t chan)
 			//Calc delta
 			int16_t delta = (channel.m_effectPortmento.Porta == EFFECT_UP) ? speed : -speed;
 
-			uint8_t prevOctave = channel.m_effectPortmento.Octave;
-			uint32_t prevSemitone = channel.m_effectPortmento.Semitone;
+			uint8_t prevOctave = channel.EffectOctave;
+			uint32_t prevSemitone = channel.EffectSemitone;
 
 			if (channel.Id < CHANNEL_PSG1)
 			{
-				SlideFM(channel.m_effectPortmento.Octave, channel.m_effectPortmento.Semitone, channel.m_effectPortmento.Porta, delta);
+				SlideFM(channel.EffectOctave, channel.EffectSemitone, delta);
 			}
 			else
 			{
-				SlidePSG(channel.m_effectPortmento.Octave, channel.m_effectPortmento.Semitone, channel.m_effectPortmento.Porta, delta);
+				SlidePSG(channel.EffectOctave, channel.EffectSemitone, delta);
 			}
 
 			//Set frequency
-			if (prevOctave != channel.m_effectPortmento.Octave || prevSemitone != channel.m_effectPortmento.Semitone)
+			if(prevOctave != channel.EffectOctave || prevSemitone != channel.EffectSemitone)
 			{
-				channel.Octave = channel.m_effectPortmento.Octave;
+				channel.Octave = channel.EffectOctave;
 
 				//If PSG4 in noise mode, set on PSG3 instead
 				if (chan == CHANNEL_PSG4 && PSGNoiseFreq)
@@ -1226,7 +1276,7 @@ int DMFConverter::ProcessActiveEffects(uint8_t chan)
 					chan = CHANNEL_PSG3;
 				}
 
-				SetFrequency(chan, channel.m_effectPortmento.Semitone, false);
+				SetFrequency(chan, channel.EffectSemitone, false);
 			}
 		}
 
@@ -1248,6 +1298,59 @@ int DMFConverter::ProcessActiveEffects(uint8_t chan)
 		channel.m_effectPSGNoise.EnvelopeIdx++;
 	}
 #endif
+
+	if(channel.m_effectVibrato.mode != EFFECT_OFF)
+	{
+		//if(channel.Id >= CHANNEL_PSG1)
+		{
+			if(channel.m_effectVibrato.stage == EFFECT_STAGE_END)
+			{
+				SetFrequency(chan, channel.EffectSemitone, false);
+				channel.m_effectVibrato.mode = EFFECT_OFF;
+				channel.m_effectVibrato.stage = EFFECT_STAGE_OFF;
+				channel.m_effectVibrato.sineTime = 0;
+			}
+			else
+			{
+				float sine = sin(-(float)channel.m_effectVibrato.sineTime / 10.0f);
+				int16_t pitchOffset = (int16_t)(sine * (float)channel.m_effectVibrato.sineAmplitude / 2.0f);
+
+				channel.m_effectVibrato.sineTime += channel.m_effectVibrato.sineSpeed;
+
+				uint8_t prevOctave = channel.EffectOctave;
+				uint32_t prevSemitone = channel.EffectSemitone;
+				uint8_t newOctave = channel.EffectOctave;
+				uint32_t newSemitone = channel.EffectSemitone;
+
+				if(channel.Id < CHANNEL_PSG1)
+				{
+					SlideFM(newOctave, newSemitone, pitchOffset);
+				}
+				else
+				{
+					SlidePSG(newOctave, newSemitone, pitchOffset);
+				}
+
+				if(newOctave != prevOctave || newSemitone != prevSemitone)
+				{
+					//Set frequency
+					channel.Octave = newOctave;
+
+					//If PSG4 in noise mode, set on PSG3 instead
+					if(chan == CHANNEL_PSG4 && PSGNoiseFreq)
+					{
+						chan = CHANNEL_PSG3;
+					}
+
+					SetFrequency(chan, newSemitone, false);
+				}
+
+				channel.m_effectVibrato.stage = EFFECT_STAGE_CONTINUE;
+			}
+			
+			numEffectsProcess++;
+		}
+	}
 
 	return numEffectsProcess;
 }

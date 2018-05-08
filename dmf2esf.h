@@ -106,7 +106,8 @@ enum EffectStage
 {
 	EFFECT_STAGE_OFF,
 	EFFECT_STAGE_INITIALISE,
-	EFFECT_STAGE_CONTINUE
+	EFFECT_STAGE_CONTINUE,
+	EFFECT_STAGE_END
 };
 
 enum EffectType
@@ -118,7 +119,7 @@ enum EffectType
 	EFFECT_TYPE_PORTMENTO_UP = 0x01, // Portamento up
 	EFFECT_TYPE_PORTMENTO_DOWN = 0x02, // Portamento down
 	EFFECT_TYPE_PORTMENTO_TO_NOTE = 0x03, // Tone portamento
-	EFFECT_TYPE_VIBTRATO = 0x04, // Vibrato
+	EFFECT_TYPE_VIBRATO = 0x04, // Vibrato
 	EFFECT_TYPE_PORTMENTO_TO_NOTE_AND_VOL_SLIDE = 0x05, // Tone portamento + volume slide
 	EFFECT_TYPE_VIBRATO_AND_VOL_SLIDE = 0x06, // Vibrato + volume slide
 	EFFECT_TYPE_TREMOLO = 0x07, // Tremolo
@@ -299,8 +300,6 @@ struct EffectPortmento
 	EffectMode  Porta;
 	EffectStage Stage;
 	uint8_t     PortaSpeed;
-	uint8_t     Octave;
-	uint32_t    Semitone;
 	bool        NoteOnthisTick;
 };
 
@@ -320,15 +319,18 @@ struct EffectPortaNote
 
 struct EffectVibrato
 {
-	EffectVibrato() { Vibrato = EFFECT_OFF; }
+	EffectVibrato()
+	{
+		mode = EFFECT_OFF;
+		sineTime = 0;
+	}
 
 	//4xx (vibrato)
-	EffectMode  Vibrato;
-	uint8_t     VibratoActive;
-	uint8_t     VibratoFineDepth;
-	uint8_t     VibratoDepth;
-	uint8_t     VibratoSpeed;
-	uint8_t     VibratoOffset;
+	EffectMode mode;
+	EffectStage stage;
+	uint8_t sineSpeed;
+	uint8_t sineAmplitude;
+	uint32_t sineTime;
 };
 
 // 5xx, 6xx ignored
@@ -438,6 +440,7 @@ struct Channel
     uint8_t     NewOctave;
 	uint8_t     EffectNote;
 	uint8_t     EffectOctave;
+	uint32_t    EffectSemitone;
     int16_t     LastFreq; // difference
     int16_t     NewFreq;  // difference
     uint8_t     Instrument;
