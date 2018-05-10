@@ -538,6 +538,8 @@ bool DMFConverter::Parse()
             esf->WaitCounter += ticksPerRow;
 
 			//Process at least one active effect tick, and continue whilst idle (waitCounter > 0)
+			int waitCounterPrev = esf->WaitCounter;
+			int numEffectWaits = 0;
 			int numEffectsProcessed = 0;
 			do
 			{
@@ -575,11 +577,13 @@ bool DMFConverter::Parse()
 						if(wholeDelay)
 						{
 							//First tick for at least one of the effects, process whole delay
+							numEffectWaits += esf->WaitCounter;
 							esf->Wait();
 						}
 						else
 						{
 							//Subsequent tick, delay by 1
+							numEffectWaits++;
 							uint32_t oldDelay = esf->WaitCounter;
 							esf->WaitCounter = 1;
 							esf->Wait();
@@ -592,12 +596,12 @@ bool DMFConverter::Parse()
 						numEffectsProcessed += ProcessActiveEffects(CurrChannel);
 					}
 
-					if(numEffectsProcessed && esf->WaitCounter > 0)
+					if(numEffectsProcessed)
 					{
-						esf->WaitCounter -= 1;
+						esf->WaitCounter = Clamp(esf->WaitCounter - 1, 0, esf->WaitCounter);
 					}
 				}
-			} while(esf->WaitCounter > 0 && numEffectsProcessed > 0);
+			} while(numEffectWaits < waitCounterPrev && numEffectsProcessed > 0);
 
             /* Are we at the loop end? If so, start playing the loop row */
             if(LoopFlag == true)
@@ -1077,7 +1081,7 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
 					}
 
 					channel.m_effectPortmento.Porta = EffectType == 0x01 ? EFFECT_UP : EFFECT_DOWN;
-					channel.m_effectPortmento.PortaSpeed = EffectParam;
+					channel.m_effectPortmento.PortaSpeed = Clamp(EffectParam, (uint8_t)0, (uint8_t)0x7F);
 
 					//Cancel vibrato
 					channel.m_effectVibrato.mode = EFFECT_OFF;
