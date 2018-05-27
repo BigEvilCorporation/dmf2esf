@@ -59,6 +59,8 @@ DMFConverter::DMFConverter(ESFOutput ** esfout) // ctor
     //NoiseMode = PSG_WHITE_NOISE_HI;
     for(int i=0; i<10; i++)
     {
+		memset(&Channels[i], 0, sizeof(Channel));
+
         Channels[i].Id = CHANNEL_FM1;
         Channels[i].Type = CHANNEL_TYPE_FM;
         Channels[i].ESFId = ESF_FM1;
@@ -81,6 +83,7 @@ DMFConverter::DMFConverter(ESFOutput ** esfout) // ctor
 		Channels[i].lastFMS = 0;
 		Channels[i].EffectNote = 0;
 		Channels[i].EffectOctave = 0;
+		Channels[i].EffectSemitone = 0;
         LoopState[i] = Channels[i];
     }
 
@@ -497,6 +500,34 @@ bool DMFConverter::Parse()
 		esf->SetLoop();
 	}
 
+	//Determine first effect (in case any effects start before the first Note On)
+	for (uint8_t CurrChannel = 0; CurrChannel < ChannelCount; CurrChannel++)
+	{
+		int firstOctave = 0;
+		int firstNote = 0;
+
+		for (CurrPattern = 0; CurrPattern < TotalPatterns && firstNote == 0; CurrPattern++)
+		{
+			for (CurrRow = 0; CurrRow < TotalRowsPerPattern && firstNote == 0; CurrRow++)
+			{
+				firstNote = m_dmfFile.m_channels[CurrChannel].m_patternPages[CurrPattern].m_notes[CurrRow].m_note;
+				firstOctave = m_dmfFile.m_channels[CurrChannel].m_patternPages[CurrPattern].m_notes[CurrRow].m_octave;
+			}
+		}
+
+		if (firstNote != 0)
+		{
+			if (firstNote == 12)
+			{
+				firstOctave++;
+				firstNote = 0;
+			}
+
+			Channels[CurrChannel].EffectNote = firstNote;
+			Channels[CurrChannel].EffectOctave = firstOctave;
+		}
+	}
+
     NextRow = 0;
 	for(CurrPattern=0;CurrPattern<TotalPatterns;CurrPattern++)
     {
@@ -677,29 +708,6 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
 		nextOctave = m_dmfFile.m_channels[chan].m_patternPages[CurrPattern].m_notes[CurrRow + 1].m_octave;
 	}
 
-    /* Instrument updated? */
-	if (chan != CHANNEL_FM6 || !DACEnabled)	// PCM is an Echo instrument, but uses NoteOn to set+play
-	{
-		if (Channels[chan].NewInstrument != Channels[chan].Instrument && Channels[chan].NewInstrument != 0xff)
-		{
-			Channels[chan].Instrument = Channels[chan].NewInstrument;
-			int instrumentIdx = Channels[chan].Instrument;
-
-			esf->SetInstrument(Channels[chan].ESFId, instrumentIdx);
-
-			/* Echo resets the volume if the instrument is changed (FM only...) */
-			if (Channels[chan].Type != CHANNEL_TYPE_PSG && Channels[chan].Type != CHANNEL_TYPE_PSG4)
-			{
-				Channels[chan].Volume = 0x7f;
-				Channels[chan].LastVolume = 0x7f;
-
-				//Set LFO and AMS
-				FMS = DMFFile::s_allInstruments[instrumentIdx].m_instrument.m_paramsFM.lfo;
-				AMS = DMFFile::s_allInstruments[instrumentIdx].m_instrument.m_paramsFM.lfo2;
-			}
-		}
-	}
-
     /* Volume updated? */
     if(Channels[chan].NewVolume != Channels[chan].Volume && Channels[chan].NewVolume != 0xff)
     {
@@ -710,6 +718,28 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
         else if(Channels[chan].Type == CHANNEL_TYPE_PSG || CHANNEL_TYPE_PSG4)
             esf->SetVolume(Channels[chan].ESFId,(Channels[chan].Volume));
     }
+
+	/* Instrument updated? */
+	if (chan != CHANNEL_FM6 || !DACEnabled)	// PCM is an Echo instrument, but uses NoteOn to set+play
+	{
+		if (Channels[chan].NewInstrument != Channels[chan].Instrument && Channels[chan].NewInstrument != 0xff)
+		{
+			Channels[chan].Instrument = Channels[chan].NewInstrument;
+			int instrumentIdx = Channels[chan].Instrument;
+
+			esf->SetInstrument(Channels[chan].ESFId, instrumentIdx);
+
+			/* Echo resets the volume if the instrument is changed */
+			if (Channels[chan].Type == CHANNEL_TYPE_FM || CHANNEL_TYPE_FM6)
+				esf->SetVolume(Channels[chan].ESFId, (Channels[chan].LastVolume));
+			else if (Channels[chan].Type == CHANNEL_TYPE_PSG || CHANNEL_TYPE_PSG4)
+				esf->SetVolume(Channels[chan].ESFId, (Channels[chan].LastVolume));
+
+			//Set LFO and AMS
+			FMS = DMFFile::s_allInstruments[instrumentIdx].m_instrument.m_paramsFM.lfo;
+			AMS = DMFFile::s_allInstruments[instrumentIdx].m_instrument.m_paramsFM.lfo2;
+		}
+	}
 
 #if 0
 	//Process PSG noise mode envelope
@@ -1084,8 +1114,8 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
 					channel.m_effectPortmento.PortaSpeed = Clamp(EffectParam, (uint8_t)0, (uint8_t)0x7F);
 
 					//Cancel vibrato
-					channel.m_effectVibrato.mode = EFFECT_OFF;
-					channel.m_effectVibrato.stage = EFFECT_STAGE_OFF;
+					//channel.m_effectVibrato.mode = EFFECT_OFF;
+					//channel.m_effectVibrato.stage = EFFECT_STAGE_OFF;
 				}
 			}
             break;
@@ -1162,7 +1192,7 @@ void SlideFM(uint8_t& octave, uint32_t& semitone, int16_t delta)
 	if (delta > 0)
 	{
 		//Clamp to max octave+freq
-		if (octave == MaxOctave && semitone > FMFreqs[MaxFMFreqs - 1])
+		if (octave == MaxOctave && (int32_t)semitone > FMFreqs[MaxFMFreqs - 1])
 		{
 			semitone = FMFreqs[MaxFMFreqs - 1];
 		}
@@ -1170,22 +1200,24 @@ void SlideFM(uint8_t& octave, uint32_t& semitone, int16_t delta)
 	else if (delta < 0)
 	{
 		//Clamp to min octave+freq
-		if (octave == 0 && semitone < FMFreqs[0])
+		if (octave == 0 && (int32_t)semitone < FMFreqs[0])
 		{
 			semitone = FMFreqs[0];
 		}
 	}
 
 	//Wrap around octave
-	if (semitone < FMFreqs[0])
+	if ((int32_t)semitone < FMSlideFreqs[0])
 	{
-		semitone = FMFreqs[MaxFMFreqs - 1];
+		uint32_t diff = FMSlideFreqs[0] - (int32_t)semitone;
+		semitone = FMSlideFreqs[MaxFMSlideFreqs - 1] - diff;
 		octave--;
 	}
 
-	if (semitone > FMFreqs[MaxFMFreqs - 1])
+	if ((int32_t)semitone > FMSlideFreqs[MaxFMSlideFreqs - 1])
 	{
-		semitone = FMFreqs[0];
+		uint32_t diff = (int32_t)semitone - FMSlideFreqs[MaxFMSlideFreqs - 1];
+		semitone = FMSlideFreqs[0] + diff;
 		octave++;
 	}
 }
@@ -1195,10 +1227,10 @@ void SlidePSG(uint8_t& octave, uint32_t& semitone, int16_t delta)
 	//Increment/decrement frequency (reverse for PSG)
 	semitone -= delta;
 
-	if(semitone < PSGFreqs[MaxPSGFreqs - 1][MaxOctave - 1])
+	if((int32_t)semitone < PSGFreqs[MaxPSGFreqs - 1][MaxOctave - 1])
 		semitone = PSGFreqs[MaxPSGFreqs - 1][MaxOctave - 1];
 
-	if(semitone > PSGFreqs[0][0])
+	if((int32_t)semitone > PSGFreqs[0][0])
 		semitone = PSGFreqs[0][0];
 
 #if 0
@@ -1305,55 +1337,59 @@ int DMFConverter::ProcessActiveEffects(uint8_t chan)
 
 	if(channel.m_effectVibrato.mode != EFFECT_OFF)
 	{
-		//if(channel.Id >= CHANNEL_PSG1)
+		if(channel.m_effectVibrato.stage == EFFECT_STAGE_END)
 		{
-			if(channel.m_effectVibrato.stage == EFFECT_STAGE_END)
+			channel.Octave = channel.EffectOctave;
+			SetFrequency(chan, channel.EffectSemitone, false);
+			channel.m_effectVibrato.mode = EFFECT_OFF;
+			channel.m_effectVibrato.stage = EFFECT_STAGE_OFF;
+			channel.m_effectVibrato.sineTime = 0;
+		}
+		else
+		{
+			float sine = sin(-(float)channel.m_effectVibrato.sineTime / 10.0f);
+
+			if (channel.Id >= CHANNEL_PSG1)
 			{
-				SetFrequency(chan, channel.EffectSemitone, false);
-				channel.m_effectVibrato.mode = EFFECT_OFF;
-				channel.m_effectVibrato.stage = EFFECT_STAGE_OFF;
-				channel.m_effectVibrato.sineTime = 0;
+				sine *= 0.5f;
+			}
+
+			int16_t pitchOffset = (int16_t)(sine * (float)channel.m_effectVibrato.sineAmplitude);
+
+			channel.m_effectVibrato.sineTime += channel.m_effectVibrato.sineSpeed;
+
+			uint8_t prevOctave = channel.EffectOctave;
+			uint32_t prevSemitone = channel.EffectSemitone;
+			uint8_t newOctave = channel.EffectOctave;
+			uint32_t newSemitone = channel.EffectSemitone;
+
+			if(channel.Id < CHANNEL_PSG1)
+			{
+				SlideFM(newOctave, newSemitone, pitchOffset);
 			}
 			else
 			{
-				float sine = sin(-(float)channel.m_effectVibrato.sineTime / 10.0f);
-				int16_t pitchOffset = (int16_t)(sine * (float)channel.m_effectVibrato.sineAmplitude / 2.0f);
-
-				channel.m_effectVibrato.sineTime += channel.m_effectVibrato.sineSpeed;
-
-				uint8_t prevOctave = channel.EffectOctave;
-				uint32_t prevSemitone = channel.EffectSemitone;
-				uint8_t newOctave = channel.EffectOctave;
-				uint32_t newSemitone = channel.EffectSemitone;
-
-				if(channel.Id < CHANNEL_PSG1)
-				{
-					SlideFM(newOctave, newSemitone, pitchOffset);
-				}
-				else
-				{
-					SlidePSG(newOctave, newSemitone, pitchOffset);
-				}
-
-				if(newOctave != prevOctave || newSemitone != prevSemitone)
-				{
-					//Set frequency
-					channel.Octave = newOctave;
-
-					//If PSG4 in noise mode, set on PSG3 instead
-					if(chan == CHANNEL_PSG4 && PSGNoiseFreq)
-					{
-						chan = CHANNEL_PSG3;
-					}
-
-					SetFrequency(chan, newSemitone, false);
-				}
-
-				channel.m_effectVibrato.stage = EFFECT_STAGE_CONTINUE;
+				SlidePSG(newOctave, newSemitone, pitchOffset);
 			}
-			
-			numEffectsProcess++;
+
+			if(newOctave != prevOctave || newSemitone != prevSemitone)
+			{
+				//Set frequency
+				channel.Octave = newOctave;
+
+				//If PSG4 in noise mode, set on PSG3 instead
+				if(chan == CHANNEL_PSG4 && PSGNoiseFreq)
+				{
+					chan = CHANNEL_PSG3;
+				}
+
+				SetFrequency(chan, newSemitone, false);
+			}
+
+			channel.m_effectVibrato.stage = EFFECT_STAGE_CONTINUE;
 		}
+			
+		numEffectsProcess++;
 	}
 
 	return numEffectsProcess;

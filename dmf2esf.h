@@ -36,7 +36,7 @@ Echo ESF documentation
     #include "ini.h"
     #include "inireader.h"
 
-typedef char int8_t;
+//typedef char int8_t;
 typedef unsigned char uint8_t;
 typedef short int16_t;
 typedef unsigned short uint16_t;
@@ -273,9 +273,15 @@ static uint16_t PSGFreqs[12][7] = // [semitone][octave]
 static const int MaxPSGFreqs = 12;
 static const int MaxFMFreqs = 12;
 static const int MaxOctave = 7;
-static uint16_t FMFreqs[MaxFMFreqs] =
+static const uint16_t FMFreqs[MaxFMFreqs] =
 {
     644,681,722,765,810,858,910,964,1021,1081,1146,1214
+};
+
+static const int MaxFMSlideFreqs = 13;
+static const uint16_t FMSlideFreqs[MaxFMSlideFreqs] =
+{
+	644,681,722,765,810,858,910,964,1021,1081,1146,1214,1288
 };
 
 static const int FM_TimerB_NTSC = 0xC9;
@@ -603,6 +609,11 @@ struct DMFFile
 
 	struct Instrument
 	{
+		Instrument()
+		{
+			m_mode = INSTRUMENT_FM;
+		}
+
 		const bool operator == (const Instrument& rhs) const
 		{
 			return (m_mode == rhs.m_mode)
@@ -617,6 +628,14 @@ struct DMFFile
 
 		struct ParamDataFM
 		{
+			ParamDataFM()
+			{
+				alg = 0;
+				fb = 0;
+				lfo = 0;
+				lfo2 = 0;
+			}
+
 			const bool operator == (const ParamDataFM& rhs) const
 			{
 				bool match = (alg == rhs.alg
@@ -641,6 +660,22 @@ struct DMFFile
 
 			struct Operator
 			{
+				Operator()
+				{
+					am = 0;
+					ar = 0;
+					dr = 0;
+					mul = 0;
+					rr = 0;
+					sl = 0;
+					tl = 0;
+					dt2 = 0;
+					rs = 0;
+					dt = 0;
+					d2r = 0;
+					ssg = 0;
+				}
+
 				const bool operator == (const Operator& rhs) const
 				{
 					return am == rhs.am
@@ -678,6 +713,11 @@ struct DMFFile
 
 		struct ParamDataPSG
 		{
+			ParamDataPSG()
+			{
+				arpeggioMode = 0;
+			}
+
 			const bool operator == (const ParamDataPSG& rhs) const
 			{
 				return envelopeVolume == rhs.envelopeVolume
@@ -691,6 +731,13 @@ struct DMFFile
 
 			struct Envelope
 			{
+				Envelope()
+				{
+					envelopeSize = 0;
+					envelopeData = NULL;
+					loopPosition = 0;
+				}
+
 				const bool operator == (const Envelope& rhs) const
 				{
 					bool match = (envelopeSize == rhs.envelopeSize && (envelopeSize == 0 || loopPosition == rhs.loopPosition));
