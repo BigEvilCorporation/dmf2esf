@@ -78,7 +78,7 @@ DMFConverter::DMFConverter(ESFOutput ** esfout) // ctor
 		Channels[i].LastVolume = 0x7f;
         Channels[i].NewVolume = 0;
         Channels[i].SubtickFX = 0;
-		Channels[i].lastPanning = 0x11;
+		Channels[i].lastPanning = 0xFF;
 		Channels[i].lastAMS = 0;
 		Channels[i].lastFMS = 0;
 		Channels[i].EffectNote = 0;
@@ -851,7 +851,7 @@ bool DMFConverter::ParseChannelRow(uint8_t chan, uint32_t CurrPattern, uint32_t 
         Channels[chan].ToneFreq = 0;
         Channels[chan].LastFreq = 0;
         Channels[chan].NewFreq = 0;
-		Channels[chan].lastPanning = 0x11;
+		Channels[chan].lastPanning = 0xFF;
 
 		//Turn off effects which stop at note off
 		channel.m_effectPortaNote.PortaNote = EFFECT_OFF;
